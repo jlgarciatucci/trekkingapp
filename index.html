@@ -37,7 +37,7 @@
   #elevChart{width:100%;height:160px;display:block;margin-top:8px;background:#091018;border-radius:8px}
   #elevHint{opacity:.75;font-size:12px;margin-left:auto}
 
-  /* Leaflet control (for better contrast) */
+  /* Leaflet layers control for dark UI */
   .leaflet-control-layers{
     border-radius:12px; overflow:hidden;
     background:#111827; color:#e5e7eb; border:1px solid #334155;
@@ -67,7 +67,7 @@
     <button id="btnKml">KML</button>
     <button id="btnGeo">GeoJSON</button>
     <button id="btnClear">Clear</button>
-    <span id="status" class="ok">click to add Start → End → Via… (drag markers)</span>
+    <span id="status" class="ok">click to add Start → End → Via… (drag markers; right-click to remove)</span>
   </div>
 </div>
 
@@ -121,7 +121,7 @@ const cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x
 });
 osm.addTo(map);
 
-// Layer control
+// Layers control
 const baseLayers = {
   "OSM Standard": osm,
   "Esri Satellite": esriSat,
