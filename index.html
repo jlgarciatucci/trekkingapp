@@ -2,49 +2,108 @@
 <html lang="en">
 <head>
 <meta charset="utf-8" />
-<meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>OSM Route Planner — BRouter + Robust Elevation</title>
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover" />
+<title>OSM Route Planner — BRouter + Robust Elevation (Mobile)</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/@turf/turf@7.1.0/turf.min.js"></script>
 
 <style>
+  :root{
+    --panel-bg:#0b1220;
+    --panel-border:#334155;
+    --panel-text:#e5e7eb;
+    --accent:#22c55e;
+  }
   html,body,#map{height:100%;margin:0}
+  #map{position:relative}
+
   .ui{
     position:absolute;top:10px;left:10px;z-index:9999;
-    background:#111827;color:#e5e7eb;padding:10px 12px;border-radius:12px;
-    font-family:system-ui,-apple-system,Segoe UI,Roboto; box-shadow:0 6px 20px rgba(0,0,0,.35)
+    background:#111827;color:var(--panel-text);padding:10px 12px;border-radius:12px;
+    font-family:system-ui,-apple-system,Segoe UI,Roboto; box-shadow:0 6px 20px rgba(0,0,0,.35);
+    max-width: min(92vw, 560px);
   }
   .ui *{font-size:14px}
   .ui select,.ui button,.ui input{
-    background:#0b1220;color:#e5e7eb;border:1px solid #334155;border-radius:10px;
+    background:#0b1220;color:var(--panel-text);border:1px solid var(--panel-border);border-radius:10px;
     padding:8px 10px;margin-right:6px; outline:none
   }
-  .row{margin-top:8px}
+  .row{margin-top:8px; display:flex; flex-wrap:wrap; gap:6px; align-items:center}
   .ok{color:#86efac}.warn{color:#fde68a}.err{color:#fca5a5}
-  .badge{background:#0b1220;border:1px solid #334155;border-radius:999px;padding:6px 10px;margin-left:8px}
+  .badge{background:#0b1220;border:1px solid var(--panel-border);border-radius:999px;padding:6px 10px;margin-left:8px}
 
-  /* Elevation panel */
+  /* Elevation bottom sheet */
   #elevWrap{
-    position:absolute;left:10px;right:10px;bottom:10px;z-index:9998;
-    background:#0b1220;color:#e5e7eb;border:1px solid #334155;border-radius:12px;
-    padding:10px 12px;box-shadow:0 6px 20px rgba(0,0,0,.35)
+    position:absolute;left:0;right:0;bottom:0;z-index:9998;
+    background:var(--panel-bg);color:var(--panel-text);border-top:1px solid var(--panel-border);
+    box-shadow:0 -8px 24px rgba(0,0,0,.35);
+    transition: height .18s ease, transform .18s ease, opacity .18s ease;
+    display:none; /* only shown when we have data */
   }
-  #elevHeader{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
-  #elevHeader .stat{background:#111827;border:1px solid #334155;border-radius:10px;padding:4px 8px}
-  #elevChart{width:100%;height:160px;display:block;margin-top:8px;background:#091018;border-radius:8px}
+  #elevInner{
+    display:flex; flex-direction:column; height:100%;
+  }
+  #dragHandle{
+    width:56px;height:6px;border-radius:999px; background:#303a52;
+    margin:8px auto 6px auto;
+    touch-action:none;
+  }
+  #elevHeader{
+    display:flex;gap:10px;align-items:center;flex-wrap:wrap;
+    padding:0 12px 6px 12px;
+  }
+  #elevHeader .stat{background:#111827;border:1px solid var(--panel-border);border-radius:10px;padding:4px 8px}
+  #elevChart{
+    width:100%;flex:1;display:block;margin-top:6px;background:#091018;border-radius:8px;
+  }
   #elevHint{opacity:.75;font-size:12px;margin-left:auto}
 
-  /* Layers control (dark UI) */
+  /* Toggle FAB for the sheet */
+  #toggleElev{
+    position:absolute; right:12px; bottom:12px; z-index:9999;
+    width:48px; height:48px; border-radius:999px; display:flex; align-items:center; justify-content:center;
+    background:#111827; color:var(--panel-text); border:1px solid var(--panel-border);
+    box-shadow:0 6px 20px rgba(0,0,0,.35); cursor:pointer; user-select:none;
+  }
+
+  /* Leaflet layers control (dark UI) */
   .leaflet-control-layers{
     border-radius:12px; overflow:hidden;
-    background:#111827; color:#e5e7eb; border:1px solid #334155;
+    background:#111827; color:var(--panel-text); border:1px solid var(--panel-border);
   }
   .leaflet-control-layers-expanded{
-    background:#111827; color:#e5e7eb;
+    background:#111827; color:var(--panel-text);
   }
-  .leaflet-control-layers-list label{ color:#e5e7eb; }
+  .leaflet-control-layers-list label{ color:var(--panel-text); }
+
+  /* Mobile optimizations */
+  @media (max-width: 768px){
+    .ui{
+      left:8px; right:8px; top:8px;
+      padding:8px 10px;
+    }
+    .ui select,.ui button,.ui input{
+      padding:6px 8px; margin-right:4px; font-size:13px;
+    }
+    .badge{padding:4px 8px}
+    /* Sheet default sizes on mobile */
+    #elevWrap.sheet{ display:block; }
+    #elevWrap.sheet.closed{ height: 0; transform: translateY(8px); opacity: 0; pointer-events:none; }
+    #elevWrap.sheet.open{ height: 28vh; transform: translateY(0); opacity: 1; }
+    #elevWrap.sheet.mid{ height: 45vh; }
+    #elevWrap.sheet.max{ height: 70vh; }
+  }
+
+  /* Desktop: keep it compact at bottom, no drag handle needed (but still works) */
+  @media (min-width: 769px){
+    #elevWrap.sheet{ display:block; }
+    #elevWrap.sheet.closed{ height: 0; transform: translateY(8px); opacity:0; pointer-events:none; }
+    #elevWrap.sheet.open{ height: 24vh; }
+    #elevWrap.sheet.mid{ height: 34vh; }
+    #elevWrap.sheet.max{ height: 46vh; }
+  }
 </style>
 </head>
 <body>
@@ -66,31 +125,37 @@
     <button id="btnKml">KML</button>
     <button id="btnGeo">GeoJSON</button>
     <button id="btnClear">Clear</button>
-    <span id="status" class="ok">click to add Start → End → Via… (drag markers; right-click to remove)</span>
+    <span id="status" class="ok">tap to add Start → End → Via… (drag markers; long-press/right-click to remove)</span>
   </div>
 </div>
 
-<!-- Elevation panel -->
-<div id="elevWrap" style="display:none">
-  <div id="elevHeader">
-    <strong>Elevation profile</strong>
-    <span class="stat" id="statMin">Min: —</span>
-    <span class="stat" id="statMax">Max: —</span>
-    <span class="stat" id="statGain">Ascent: —</span>
-    <span class="stat" id="statLoss">Descent: —</span>
+<!-- FAB to toggle elevation -->
+<div id="toggleElev" title="Show/hide elevation">⌄</div>
 
-    <label style="margin-left:12px">Smoothing
-      <select id="smoothLevel">
-        <option value="none">None</option>
-        <option value="low" selected>Low</option>
-        <option value="med">Medium</option>
-        <option value="high">High</option>
-      </select>
-    </label>
+<!-- Elevation bottom sheet -->
+<div id="elevWrap" class="sheet closed" aria-hidden="true">
+  <div id="elevInner">
+    <div id="dragHandle"></div>
+    <div id="elevHeader">
+      <strong>Elevation</strong>
+      <span class="stat" id="statMin">Min: —</span>
+      <span class="stat" id="statMax">Max: —</span>
+      <span class="stat" id="statGain">Ascent: —</span>
+      <span class="stat" id="statLoss">Descent: —</span>
 
-    <span id="elevHint">hover the chart to see values</span>
+      <label style="margin-left:12px">Smoothing
+        <select id="smoothLevel">
+          <option value="none">None</option>
+          <option value="low" selected>Low</option>
+          <option value="med">Medium</option>
+          <option value="high">High</option>
+        </select>
+      </label>
+
+      <span id="elevHint">drag the bar to resize • tap ⌄ to hide</span>
+    </div>
+    <svg id="elevChart"></svg>
   </div>
-  <svg id="elevChart"></svg>
 </div>
 
 <script>
@@ -174,7 +239,7 @@ document.getElementById('btnClear').onclick = ()=>{
   redrawMarkers();
   if(routeLayer){ map.removeLayer(routeLayer); routeLayer = null; }
   currentGeo = null;
-  hideElevation();
+  hideElevation(true); // force close
   updateDistance(0);
   status('cleared','ok');
 };
@@ -183,7 +248,7 @@ document.getElementById('btnClear').onclick = ()=>{
 async function computeRoute(){
   if(routeLayer){ map.removeLayer(routeLayer); routeLayer = null; }
   currentGeo = null;
-  hideElevation();
+  hideElevation(); // close while routing
   status('routing with BRouter…','warn');
 
   try{
@@ -233,7 +298,7 @@ async function fetchOSRMFootGeoJSON(pts){
 function drawRouteGeoJSON(geo){
   currentGeo = geo;
   if(routeLayer){ map.removeLayer(routeLayer); }
-  routeLayer = L.geoJSON(geo, { style: { color:'#22c55e', weight:5, opacity:0.95 } }).addTo(map);
+  routeLayer = L.geoJSON(geo, { style: { color:var(--accent), weight:5, opacity:0.95 } }).addTo(map);
   try { map.fitBounds(routeLayer.getBounds(), { padding:[20,20] }); } catch(_) {}
   const merged = mergeToLineString(geo);
   const km = merged ? turf.length(merged, {units:'kilometers'}) : 0;
@@ -255,7 +320,7 @@ function updateDistance(km){
   distBadge.textContent = `${(km||0).toFixed(2)} km`;
 }
 
-/* ============== Elevation profile (robust) ============== */
+/* ============== Elevation profile (robust + mobile sheet) ============== */
 const elevWrap   = document.getElementById('elevWrap');
 const elevChart  = document.getElementById('elevChart');
 const statMin    = document.getElementById('statMin');
@@ -263,8 +328,90 @@ const statMax    = document.getElementById('statMax');
 const statGain   = document.getElementById('statGain');
 const statLoss   = document.getElementById('statLoss');
 const smoothSel  = document.getElementById('smoothLevel');
+const toggleElev = document.getElementById('toggleElev');
+const dragHandle = document.getElementById('dragHandle');
 
-function hideElevation(){ elevWrap.style.display = 'none'; elevChart.innerHTML = ''; }
+function setSheetState(state){ // 'closed' | 'open' | 'mid' | 'max'
+  elevWrap.classList.remove('closed','open','mid','max');
+  elevWrap.classList.add(state);
+  elevWrap.setAttribute('aria-hidden', state==='closed' ? 'true' : 'false');
+  toggleElev.textContent = (state==='closed') ? '⌃' : '⌄';
+  // Recalculate chart size after transition
+  setTimeout(()=>{ renderReflow(); }, 220);
+}
+function showElevation(initial='open'){
+  elevWrap.style.display = 'block';
+  setSheetState(initial);
+}
+function hideElevation(force=false){
+  if(force){ setSheetState('closed'); }
+  elevChart.innerHTML = '';
+}
+
+function renderReflow(){
+  // Trigger Leaflet size update and rerender chart at new size
+  map.invalidateSize();
+  if(current_elev_cache){
+    renderElevation(current_elev_cache.latlngs, current_elev_cache.elevs);
+  }
+}
+
+// FAB toggle
+toggleElev.addEventListener('click', ()=>{
+  if(elevWrap.classList.contains('closed')){
+    setSheetState('open');
+  }else{
+    setSheetState('closed');
+  }
+});
+
+// Drag to resize (touch + mouse)
+(function enableDrag(){
+  let startY=0, startH=0, dragging=false;
+  const MIN = 0.15, MID = 0.45, MAX = 0.70; // of viewport height
+
+  function vh(px){ return px / window.innerHeight; }
+
+  function onStart(e){
+    dragging = true;
+    startY = (e.touches? e.touches[0].clientY : e.clientY);
+    startH = elevWrap.getBoundingClientRect().height;
+    document.body.style.userSelect = 'none';
+    e.preventDefault();
+  }
+  function onMove(e){
+    if(!dragging) return;
+    const y = (e.touches? e.touches[0].clientY : e.clientY);
+    const dy = startY - y; // drag up => increase
+    let newH = startH + dy;
+    const minH = MIN * window.innerHeight;
+    const maxH = MAX * window.innerHeight;
+    newH = Math.max(minH, Math.min(maxH, newH));
+    elevWrap.style.height = `${newH}px`;
+    elevWrap.classList.add('sheet'); // ensure visible
+    elevWrap.classList.remove('closed','open','mid','max');
+    e.preventDefault();
+    renderReflow();
+  }
+  function onEnd(){
+    if(!dragging) return;
+    dragging = false;
+    document.body.style.userSelect = '';
+    const h = elevWrap.getBoundingClientRect().height;
+    const ratio = vh(h);
+    // snap to nearest state
+    const target = (ratio < (MIN+MID)/2) ? 'open' : (ratio < (MID+MAX)/2 ? 'mid' : 'max');
+    setSheetState(target);
+    elevWrap.style.height = ''; // return to CSS rule
+  }
+
+  dragHandle.addEventListener('mousedown', onStart, {passive:false});
+  dragHandle.addEventListener('touchstart', onStart, {passive:false});
+  window.addEventListener('mousemove', onMove, {passive:false});
+  window.addEventListener('touchmove', onMove, {passive:false});
+  window.addEventListener('mouseup', onEnd);
+  window.addEventListener('touchend', onEnd);
+})();
 
 // simple median filter (odd window)
 function medianFilter(arr, win){
@@ -323,7 +470,7 @@ function routeInEurope(lineFeature){
 async function buildElevation(geo){
   try{
     const line = mergeToLineString(geo);
-    if(!line) { hideElevation(); return; }
+    if(!line) { setSheetState('closed'); return; }
 
     const lengthKm = turf.length(line, {units:'kilometers'});
 
@@ -344,16 +491,19 @@ async function buildElevation(geo){
 
     if (!elevations || elevations.every(v => v == null)){
       status('Elevation unavailable (all providers failed)', 'warn');
-      hideElevation();
+      setSheetState('closed');
       return;
     }
 
     current_elev_cache = { latlngs: pts, elevs: elevations };
     renderElevation(pts, elevations);
+
+    // Show sheet at a comfortable size (mobile open; desktop open)
+    showElevation('open');
   }catch(err){
     console.warn('Elevation failed:', err);
     status('Elevation error (see console)', 'warn');
-    hideElevation();
+    setSheetState('closed');
   }
 }
 
@@ -406,13 +556,12 @@ async function fetchOpenElevation(latlngs){
 }
 
 function renderElevation(latlngs, elevsRaw){
-  if(!elevsRaw || !elevsRaw.length) return hideElevation();
+  if(!elevsRaw || !elevsRaw.length) return;
 
-  // smooth it
   const level = smoothSel.value;
   const elevs = smoothSeries(elevsRaw, level);
 
-  // Compute stats on smoothed series
+  // Compute stats
   let min = Infinity, max = -Infinity, gain = 0, loss = 0;
   for(let i=0;i<elevs.length;i++){
     const z = elevs[i]; if(z==null) continue;
@@ -454,16 +603,16 @@ function renderElevation(latlngs, elevsRaw){
   elevChart.innerHTML = `
     <defs>
       <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
-        <stop offset="0%" stop-color="#22c55e" stop-opacity="0.35"/>
-        <stop offset="100%" stop-color="#22c55e" stop-opacity="0.05"/>
+        <stop offset="0%" stop-color="${getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()}" stop-opacity="0.35"/>
+        <stop offset="100%" stop-color="${getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()}" stop-opacity="0.05"/>
       </linearGradient>
     </defs>
     <rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>
     <path d="${area}" fill="url(#grad)"></path>
-    <path d="${d}" fill="none" stroke="#22c55e" stroke-width="2"></path>
+    <path d="${d}" fill="none" stroke="${getComputedStyle(document.documentElement).getPropertyValue('--accent').trim()}" stroke-width="2"></path>
     ${ticks.map((t,i)=>{
       const y = scaleY(t);
-      return `<line x1="${pad}" y1="${y}" x2="${pad+w}" y2="${y}" stroke="#223" stroke-dasharray="3,3"/>
+      return `<line x1="${pad}" y1="${y}" x2="${pad+w}" stroke="#223" stroke-dasharray="3,3"/>
               <text x="${pad-6}" y="${y+4}" text-anchor="end" fill="#9ca3af" font-size="11">${Math.round(t)} m</text>`;
     }).join('')}
   `;
@@ -486,9 +635,9 @@ function renderElevation(latlngs, elevsRaw){
     return Math.round(ratio * (elevs.length-1));
   }
 
-  elevChart.onmousemove = (evt)=>{
+  function updateTip(evt){
     const rect = elevChart.getBoundingClientRect();
-    const x = evt.clientX - rect.left;
+    const x = (evt.touches ? evt.touches[0].clientX : evt.clientX) - rect.left;
     const i = nearestIndex(x);
     const xi = scaleX(i), yi = scaleY(elevs[i]);
     tooltip.style.display = '';
@@ -498,10 +647,12 @@ function renderElevation(latlngs, elevsRaw){
     const distTotal = turf.length(mergeToLineString(currentGeo), {units:'kilometers'}) || 0;
     const distAt = (distTotal * (i/(elevs.length-1)));
     label.textContent = `${Math.round(elevs[i])} m @ ${distAt.toFixed(2)} km`;
-  };
-  elevChart.onmouseleave = ()=>{ tooltip.style.display = 'none'; };
+  }
 
-  elevWrap.style.display = 'block';
+  elevChart.onmousemove = updateTip;
+  elevChart.ontouchstart = updateTip;
+  elevChart.ontouchmove = updateTip;
+  elevChart.onmouseleave = ()=>{ tooltip.style.display = 'none'; };
 }
 
 /* ============== Profile change triggers re-route ============== */
@@ -601,6 +752,8 @@ function resampleArray(arr, n){
 }
 
 function escapeXml(s){ return String(s).replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c])); }
+
+/* ===== Elevation helpers (already defined in previous sections) ===== */
 
 </script>
 </body>
