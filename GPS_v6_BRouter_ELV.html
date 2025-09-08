@@ -1,0 +1,483 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8" />
+<meta name="viewport" content="width=device-width, initial-scale=1" />
+<title>OSM Route Planner — BRouter + Smooth Elevation</title>
+
+<link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+<script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+<script src="https://unpkg.com/@turf/turf@7.1.0/turf.min.js"></script>
+
+<style>
+  html,body,#map{height:100%;margin:0}
+  .ui{
+    position:absolute;top:10px;left:10px;z-index:9999;
+    background:#111827;color:#e5e7eb;padding:10px 12px;border-radius:12px;
+    font-family:system-ui,-apple-system,Segoe UI,Roboto; box-shadow:0 6px 20px rgba(0,0,0,.35)
+  }
+  .ui *{font-size:14px}
+  .ui select,.ui button,.ui input{
+    background:#0b1220;color:#e5e7eb;border:1px solid #334155;border-radius:10px;
+    padding:8px 10px;margin-right:6px
+  }
+  .row{margin-top:8px}
+  .ok{color:#86efac}.warn{color:#fde68a}.err{color:#fca5a5}
+  .badge{background:#0b1220;border:1px solid #334155;border-radius:999px;padding:6px 10px;margin-left:8px}
+  .tip{opacity:.85;margin-left:6px}
+
+  /* Elevation panel */
+  #elevWrap{
+    position:absolute;left:10px;right:10px;bottom:10px;z-index:9998;
+    background:#0b1220;color:#e5e7eb;border:1px solid #334155;border-radius:12px;
+    padding:10px 12px;box-shadow:0 6px 20px rgba(0,0,0,.35)
+  }
+  #elevHeader{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  #elevHeader .stat{background:#111827;border:1px solid #334155;border-radius:10px;padding:4px 8px}
+  #elevChart{width:100%;height:160px;display:block;margin-top:8px;background:#091018;border-radius:8px}
+  #elevHint{opacity:.75;font-size:12px;margin-left:auto}
+</style>
+</head>
+<body>
+<div id="map"></div>
+
+<div class="ui">
+  <div class="row">
+    <b>BRouter profile</b>
+    <select id="profile">
+      <option value="hiking">hiking (prefers trails)</option>
+      <option value="foot">foot (pedestrian)</option>
+      <option value="trekking">trekking (bike/hike mix)</option>
+    </select>
+    <span id="dist" class="badge">0.00 km</span>
+  </div>
+  <div class="row">
+    <input id="routeName" placeholder="Route name" size="16" />
+    <button id="btnGpx">Export GPX</button>
+    <button id="btnKml">KML</button>
+    <button id="btnGeo">GeoJSON</button>
+    <button id="btnClear">Clear</button>
+    <span id="status" class="ok">click to add Start → End → Via… (drag markers)</span>
+  </div>
+</div>
+
+<!-- Elevation panel -->
+<div id="elevWrap" style="display:none">
+  <div id="elevHeader">
+    <strong>Elevation profile</strong>
+    <span class="stat" id="statMin">Min: —</span>
+    <span class="stat" id="statMax">Max: —</span>
+    <span class="stat" id="statGain">Ascent: —</span>
+    <span class="stat" id="statLoss">Descent: —</span>
+
+    <label style="margin-left:12px">Smoothing
+      <select id="smoothLevel">
+        <option value="none">None</option>
+        <option value="low" selected>Low</option>
+        <option value="med">Medium</option>
+        <option value="high">High</option>
+      </select>
+    </label>
+
+    <span id="elevHint">hover the chart to see values</span>
+  </div>
+  <svg id="elevChart"></svg>
+</div>
+
+<script>
+/* ============== Map ============== */
+const map = L.map('map').setView([41.387, 2.170], 12);
+L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 20, attribution: '© OpenStreetMap'
+}).addTo(map);
+
+const profileSel = document.getElementById('profile');
+const distBadge  = document.getElementById('dist');
+const statusEl   = document.getElementById('status');
+const routeName  = document.getElementById('routeName');
+
+function status(msg, cls='ok'){ statusEl.className = cls; statusEl.textContent = msg; }
+
+/* ============== Waypoints & markers ============== */
+let waypoints = [];        // array of L.LatLng
+let markersLayer = L.layerGroup().addTo(map);
+let routeLayer   = null;   // L.GeoJSON of the route
+let currentGeo   = null;   // GeoJSON FeatureCollection of the route
+
+map.on('click', (e)=> addWaypoint(e.latlng));
+
+function addWaypoint(latlng){
+  waypoints.push(latlng);
+  redrawMarkers();
+  if(waypoints.length >= 2) computeRoute();
+}
+
+function redrawMarkers(){
+  markersLayer.clearLayers();
+  waypoints.forEach((ll, idx)=>{
+    const label = (idx===0?'Start': (idx===waypoints.length-1?'End':'Via'));
+    const m = L.marker(ll, { draggable:true, title:label }).addTo(markersLayer);
+    m.bindTooltip(label, {permanent:true, direction:'top', offset:[0,-12]});
+    m.on('dragend', (ev)=>{ waypoints[idx] = ev.target.getLatLng(); computeRoute(); });
+    m.on('contextmenu', ()=>{ // right-click to remove a waypoint
+      waypoints.splice(idx,1);
+      redrawMarkers();
+      if(routeLayer){ map.removeLayer(routeLayer); routeLayer = null; currentGeo = null; }
+      hideElevation();
+      if(waypoints.length >= 2) computeRoute(); else updateDistance(0);
+    });
+  });
+}
+
+document.getElementById('btnClear').onclick = ()=>{
+  waypoints = [];
+  redrawMarkers();
+  if(routeLayer){ map.removeLayer(routeLayer); routeLayer = null; }
+  currentGeo = null;
+  hideElevation();
+  updateDistance(0);
+  status('cleared','ok');
+};
+
+/* ============== Routing (BRouter first, OSRM foot fallback) ============== */
+async function computeRoute(){
+  if(routeLayer){ map.removeLayer(routeLayer); routeLayer = null; }
+  currentGeo = null;
+  hideElevation();
+  status('routing with BRouter…','warn');
+
+  try{
+    const geo = await fetchBRouterGeoJSON(waypoints, profileSel.value);
+    drawRouteGeoJSON(geo);
+    status('ok (BRouter)','ok');
+    buildElevation(geo);
+  }catch(err){
+    console.warn('BRouter failed:', err);
+    status('BRouter failed → trying OSRM foot…','warn');
+    try{
+      const geo = await fetchOSRMFootGeoJSON(waypoints);
+      drawRouteGeoJSON(geo);
+      status('ok (OSRM foot fallback)','ok');
+      buildElevation(geo);
+    }catch(e2){
+      console.error('OSRM fallback failed:', e2);
+      status('routing failed on all services','err');
+    }
+  }
+}
+
+function encodeLonLats(pts){
+  // BRouter expects lon,lat pairs bar-separated
+  return pts.map(ll => `${ll.lng.toFixed(6)},${ll.lat.toFixed(6)}`).join('|');
+}
+
+async function fetchBRouterGeoJSON(pts, profile){
+  const lonlats = encodeLonLats(pts);
+  const url = `https://brouter.de/brouter?lonlats=${encodeURIComponent(lonlats)}&profile=${encodeURIComponent(profile)}&alternativeidx=0&format=geojson`;
+  const r = await fetch(url, { method:'GET' });
+  if(!r.ok) throw new Error('HTTP '+r.status);
+  // BRouter returns a GeoJSON FeatureCollection
+  return await r.json();
+}
+
+async function fetchOSRMFootGeoJSON(pts){
+  const coords = pts.map(ll => `${ll.lng.toFixed(6)},${ll.lat.toFixed(6)}`).join(';');
+  const url = `https://routing.openstreetmap.de/routed-foot/route/v1/foot/${coords}?overview=full&geometries=geojson&steps=false&alternatives=false`;
+  const r = await fetch(url, { method:'GET' });
+  const j = await r.json().catch(()=>null);
+  if(!r.ok || !j || !j.routes || !j.routes.length) throw new Error('OSRM foot error');
+  const line = j.routes[0].geometry; // GeoJSON LineString
+  return { type:'FeatureCollection', features:[{ type:'Feature', properties:{source:'osrm-foot'}, geometry: line }] };
+}
+
+/* ============== Draw + distance + fit ============== */
+function drawRouteGeoJSON(geo){
+  currentGeo = geo;
+  if(routeLayer){ map.removeLayer(routeLayer); }
+  routeLayer = L.geoJSON(geo, { style: { color:'#22c55e', weight:5, opacity:0.95 } }).addTo(map);
+  try { map.fitBounds(routeLayer.getBounds(), { padding:[20,20] }); } catch(_) {}
+  const merged = mergeToLineString(geo);
+  const km = merged ? turf.length(merged, {units:'kilometers'}) : 0;
+  updateDistance(km);
+}
+
+function mergeToLineString(fc){
+  if(!fc || !fc.features) return null;
+  const coords = [];
+  fc.features.forEach(f=>{
+    if(!f.geometry) return;
+    if(f.geometry.type==='LineString') coords.push(...f.geometry.coordinates);
+    if(f.geometry.type==='MultiLineString') f.geometry.coordinates.forEach(c=>coords.push(...c));
+  });
+  return coords.length ? { type:'Feature', geometry:{ type:'LineString', coordinates: coords }, properties:{} } : null;
+}
+
+function updateDistance(km){
+  distBadge.textContent = `${(km||0).toFixed(2)} km`;
+}
+
+/* ============== Elevation profile (with smoothing) ============== */
+const elevWrap   = document.getElementById('elevWrap');
+const elevChart  = document.getElementById('elevChart');
+const statMin    = document.getElementById('statMin');
+const statMax    = document.getElementById('statMax');
+const statGain   = document.getElementById('statGain');
+const statLoss   = document.getElementById('statLoss');
+const smoothSel  = document.getElementById('smoothLevel');
+
+function hideElevation(){ elevWrap.style.display = 'none'; elevChart.innerHTML = ''; }
+
+// simple median filter (odd window)
+function medianFilter(arr, win){
+  const k = Math.floor(win/2);
+  const out = arr.slice();
+  for(let i=0;i<arr.length;i++){
+    const a = Math.max(0,i-k), b = Math.min(arr.length-1,i+k);
+    const slice = arr.slice(a,b+1).filter(v=>v!=null).sort((x,y)=>x-y);
+    out[i] = slice.length ? slice[Math.floor(slice.length/2)] : arr[i];
+  }
+  return out;
+}
+// centered moving average (odd window)
+function movingAverage(arr, win){
+  const k = Math.floor(win/2);
+  const out = arr.slice();
+  for(let i=0;i<arr.length;i++){
+    const a = Math.max(0,i-k), b = Math.min(arr.length-1,i+k);
+    const slice = arr.slice(a,b+1).filter(v=>v!=null);
+    const sum = slice.reduce((s,v)=>s+v,0);
+    out[i] = slice.length ? (sum/slice.length) : arr[i];
+  }
+  return out;
+}
+function smoothSeries(raw, level){
+  if(level==='none') return raw.slice();
+  // base windows by level
+  const cfg = {
+    low: { med:5, avg:7 },
+    med: { med:5, avg:11 },
+    high:{ med:7, avg:15 }
+  }[level] || { med:5, avg:7 };
+  const m = medianFilter(raw, cfg.med);
+  return movingAverage(m, cfg.avg);
+}
+
+smoothSel.addEventListener('change', ()=> {
+  if(current_elev_cache){
+    renderElevation(current_elev_cache.latlngs, current_elev_cache.elevs); // re-render with new smoothing
+  }
+});
+
+let current_elev_cache = null;
+
+async function buildElevation(geo){
+  try{
+    const line = mergeToLineString(geo);
+    if(!line) return hideElevation();
+
+    // sample up to 200 points along the route
+    const lengthKm = turf.length(line, {units:'kilometers'});
+    const samples  = Math.max(20, Math.min(200, Math.round(lengthKm * 30))); // ~30 pts per km, cap 200
+    const pts = [];
+    for(let i=0;i<=samples;i++){
+      const seg = turf.along(line, (lengthKm * i / samples), {units:'kilometers'});
+      const [x,y] = seg.geometry.coordinates;
+      pts.push([y,x]); // lat,lon
+    }
+
+    let elevations = await fetchElevationsOpenTopo(pts).catch(()=>null);
+    if(!elevations || elevations.some(v=>v==null)){
+      elevations = await fetchElevationsOpenElevation(pts);
+    }
+
+    current_elev_cache = { latlngs: pts, elevs: elevations };
+    renderElevation(pts, elevations);
+  }catch(err){
+    console.warn('Elevation failed:', err);
+    hideElevation();
+  }
+}
+
+async function fetchElevationsOpenTopo(latlngs){
+  const BATCH = 100;
+  const out = [];
+  for(let i=0;i<latlngs.length;i+=BATCH){
+    const chunk = latlngs.slice(i,i+BATCH)
+      .map(([lat,lon]) => `${lat.toFixed(5)},${lon.toFixed(5)}`).join('|');
+    const url = `https://api.opentopodata.org/v1/srtm90m?locations=${encodeURIComponent(chunk)}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if(!r.ok || !j || !j.results) throw new Error('OpenTopoData error');
+    j.results.forEach(res => out.push(res.elevation));
+  }
+  return out;
+}
+
+async function fetchElevationsOpenElevation(latlngs){
+  const BATCH = 100;
+  const out = [];
+  for(let i=0;i<latlngs.length;i+=BATCH){
+    const chunk = latlngs.slice(i,i+BATCH)
+      .map(([lat,lon]) => `${lat.toFixed(5)},${lon.toFixed(5)}`).join('|');
+    const url = `https://api.open-elevation.com/api/v1/lookup?locations=${encodeURIComponent(chunk)}`;
+    const r = await fetch(url);
+    const j = await r.json();
+    if(!r.ok || !j || !j.results) throw new Error('OpenElevation error');
+    j.results.forEach(res => out.push(res.elevation));
+  }
+  return out;
+}
+
+function renderElevation(latlngs, elevsRaw){
+  if(!elevsRaw || !elevsRaw.length) return hideElevation();
+
+  // smooth it
+  const level = smoothSel.value;
+  const elevs = smoothSeries(elevsRaw, level);
+
+  // Compute stats on smoothed series
+  let min = Infinity, max = -Infinity, gain = 0, loss = 0;
+  for(let i=0;i<elevs.length;i++){
+    const z = elevs[i]; if(z==null) continue;
+    if(z<min) min = z; if(z>max) max = z;
+    if(i>0 && elevs[i-1]!=null){
+      const dz = z - elevs[i-1];
+      if(dz>0) gain += dz; else loss += -dz;
+    }
+  }
+
+  statMin.textContent  = `Min: ${Math.round(min)} m`;
+  statMax.textContent  = `Max: ${Math.round(max)} m`;
+  statGain.textContent = `Ascent: ${Math.round(gain)} m`;
+  statLoss.textContent = `Descent: ${Math.round(loss)} m`;
+
+  // Build SVG
+  const W = elevChart.clientWidth || 600;
+  const H = elevChart.clientHeight || 160;
+  const pad = 24;
+  const w = W - pad*2;
+  const h = H - pad*2;
+
+  const eMin = Math.min(min, max-1);
+  const eMax = max;
+  const scaleX = (i)=> pad + (i/(elevs.length-1))*w;
+  const scaleY = (z)=> pad + h - ((z - eMin) / (eMax - eMin || 1)) * h;
+
+  // Path
+  let d = '';
+  for(let i=0;i<elevs.length;i++){
+    const x = scaleX(i), y = scaleY(elevs[i]);
+    d += (i===0 ? `M ${x} ${y}` : ` L ${x} ${y}`);
+  }
+  const area = `${d} L ${pad + w} ${pad + h} L ${pad} ${pad + h} Z`;
+
+  // Axis ticks
+  const ticks = [eMin, (eMin+eMax)/2, eMax];
+
+  elevChart.innerHTML = `
+    <defs>
+      <linearGradient id="grad" x1="0" y1="0" x2="0" y2="1">
+        <stop offset="0%" stop-color="#22c55e" stop-opacity="0.35"/>
+        <stop offset="100%" stop-color="#22c55e" stop-opacity="0.05"/>
+      </linearGradient>
+    </defs>
+    <rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>
+    <path d="${area}" fill="url(#grad)"></path>
+    <path d="${d}" fill="none" stroke="#22c55e" stroke-width="2"></path>
+    ${ticks.map((t,i)=>{
+      const y = scaleY(t);
+      return `<line x1="${pad}" y1="${y}" x2="${pad+w}" y2="${y}" stroke="#223" stroke-dasharray="3,3"/>
+              <text x="${pad-6}" y="${y+4}" text-anchor="end" fill="#9ca3af" font-size="11">${Math.round(t)} m</text>`;
+    }).join('')}
+  `;
+
+  // Hover tooltip
+  const tooltip = document.createElementNS('http://www.w3.org/2000/svg','g');
+  const line   = document.createElementNS('http://www.w3.org/2000/svg','line');
+  const dot    = document.createElementNS('http://www.w3.org/2000/svg','circle');
+  const label  = document.createElementNS('http://www.w3.org/2000/svg','text');
+  line.setAttribute('stroke','#93c5fd'); line.setAttribute('y1', pad); line.setAttribute('y2', pad+h);
+  dot.setAttribute('r','3'); dot.setAttribute('fill','#93c5fd'); dot.setAttribute('stroke','#111827');
+  label.setAttribute('fill','#e5e7eb'); label.setAttribute('font-size','11');
+  tooltip.appendChild(line); tooltip.appendChild(dot); tooltip.appendChild(label);
+  elevChart.appendChild(tooltip);
+  tooltip.style.display = 'none';
+
+  function nearestIndex(mouseX){
+    const x = Math.max(pad, Math.min(mouseX, pad+w));
+    const ratio = (x - pad)/w;
+    return Math.round(ratio * (elevs.length-1));
+  }
+
+  elevChart.onmousemove = (evt)=>{
+    const rect = elevChart.getBoundingClientRect();
+    const x = evt.clientX - rect.left;
+    const i = nearestIndex(x);
+    const xi = scaleX(i), yi = scaleY(elevs[i]);
+    tooltip.style.display = '';
+    line.setAttribute('x1', xi); line.setAttribute('x2', xi);
+    dot.setAttribute('cx', xi);  dot.setAttribute('cy', yi);
+    label.setAttribute('x', xi+6); label.setAttribute('y', yi-8);
+    const distTotal = turf.length(mergeToLineString(currentGeo), {units:'kilometers'}) || 0;
+    const distAt = (distTotal * (i/(elevs.length-1)));
+    label.textContent = `${Math.round(elevs[i])} m @ ${distAt.toFixed(2)} km`;
+  };
+  elevChart.onmouseleave = ()=>{ tooltip.style.display = 'none'; };
+
+  elevWrap.style.display = 'block';
+}
+
+/* ============== Profile change triggers re-route ============== */
+profileSel.addEventListener('change', ()=>{ if(waypoints.length>=2) computeRoute(); });
+
+/* ============== Exporters ============== */
+function ensureRoute(){
+  if(!currentGeo){ alert('No route to export'); return null; }
+  const name = (routeName.value || 'My Route').replace(/[<&>]/g,' ');
+  return { geo: currentGeo, name };
+}
+
+document.getElementById('btnGeo').onclick = ()=>{
+  const rt = ensureRoute(); if(!rt) return;
+  downloadText((routeName.value||'route')+'.geojson', JSON.stringify(rt.geo,null,2), 'application/geo+json');
+};
+
+document.getElementById('btnGpx').onclick = ()=>{
+  const rt = ensureRoute(); if(!rt) return;
+  const line = mergeToLineString(rt.geo);
+  const pts = line.geometry.coordinates.map(([x,y])=>`<trkpt lat="${y}" lon="${x}"></trkpt>`).join('');
+  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="OSM Route Planner" xmlns="http://www.topografix.com/GPX/1/1">
+  <trk><name>${rt.name}</name><trkseg>${pts}</trkseg></trk>
+</gpx>`;
+  downloadText((routeName.value||'route')+'.gpx', gpx, 'application/gpx+xml');
+};
+
+document.getElementById('btnKml').onclick = ()=>{
+  const rt = ensureRoute(); if(!rt) return;
+  const line = mergeToLineString(rt.geo);
+  const coords = line.geometry.coordinates.map(([x,y])=>`${x},${y},0`).join(' ');
+  const kml = `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
+  <name>${rt.name}</name>
+  <Placemark><name>${rt.name}</name><LineString><coordinates>${coords}</coordinates></LineString></Placemark>
+</Document></kml>`;
+  downloadText((routeName.value||'route')+'.kml', kml, 'application/vnd.google-earth.kml+xml');
+};
+
+function downloadText(filename, text, type){
+  const a = document.createElement('a');
+  a.href = URL.createObjectURL(new Blob([text], {type}));
+  a.download = filename; a.click();
+  setTimeout(()=>URL.revokeObjectURL(a.href),0);
+}
+
+/* ============== Geolocate convenience ============== */
+if('geolocation' in navigator){
+  navigator.geolocation.getCurrentPosition(pos=>{
+    map.setView([pos.coords.latitude, pos.coords.longitude], 13);
+  });
+}
+</script>
+</body>
+</html>
