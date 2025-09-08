@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>OSM Route Planner — BRouter + Smooth Elevation</title>
+<title>OSM Route Planner — BRouter + High-Accuracy Elevation</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -19,7 +19,7 @@
   .ui *{font-size:14px}
   .ui select,.ui button,.ui input{
     background:#0b1220;color:#e5e7eb;border:1px solid #334155;border-radius:10px;
-    padding:8px 10px;margin-right:6px
+    padding:8px 10px;margin-right:6px; outline:none
   }
   .row{margin-top:8px}
   .ok{color:#86efac}.warn{color:#fde68a}.err{color:#fca5a5}
@@ -36,6 +36,16 @@
   #elevHeader .stat{background:#111827;border:1px solid #334155;border-radius:10px;padding:4px 8px}
   #elevChart{width:100%;height:160px;display:block;margin-top:8px;background:#091018;border-radius:8px}
   #elevHint{opacity:.75;font-size:12px;margin-left:auto}
+
+  /* Leaflet control (for better contrast) */
+  .leaflet-control-layers{
+    border-radius:12px; overflow:hidden;
+    background:#111827; color:#e5e7eb; border:1px solid #334155;
+  }
+  .leaflet-control-layers-expanded{
+    background:#111827; color:#e5e7eb;
+  }
+  .leaflet-control-layers-list label{ color:#e5e7eb; }
 </style>
 </head>
 <body>
@@ -87,9 +97,48 @@
 <script>
 /* ============== Map ============== */
 const map = L.map('map').setView([41.387, 2.170], 12);
-L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 20, attribution: '© OpenStreetMap'
-}).addTo(map);
+
+// --- Base maps ---
+const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+  maxZoom: 20,
+  attribution: '© OpenStreetMap contributors'
+});
+const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
+  'World_Imagery/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 20,
+  attribution: 'Tiles © Esri — Sources: Esri, i-cubed, USDA, USGS, IGN, etc.'
+});
+const esriLabels = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
+  'Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
+  maxZoom: 20, attribution: 'Labels © Esri'
+});
+const openTopo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
+  maxZoom: 17,
+  attribution: '© OpenStreetMap, SRTM — OpenTopoMap (CC-BY-SA)'
+});
+const cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+  maxZoom: 20, attribution: '© OpenStreetMap, © CARTO'
+});
+osm.addTo(map);
+
+// Layer control
+const baseLayers = {
+  "OSM Standard": osm,
+  "Esri Satellite": esriSat,
+  "OpenTopoMap": openTopo,
+  "CARTO Dark": cartoDark
+};
+const overlays = {
+  "Labels (Esri)": esriLabels
+};
+L.control.layers(baseLayers, overlays, { position: 'topright', collapsed: true }).addTo(map);
+
+// Auto-show labels over satellite
+map.on('baselayerchange', (e) => {
+  if (e.name === 'Esri Satellite') {
+    if (!map.hasLayer(esriLabels)) esriLabels.addTo(map);
+  }
+});
 
 const profileSel = document.getElementById('profile');
 const distBadge  = document.getElementById('dist');
@@ -176,8 +225,7 @@ async function fetchBRouterGeoJSON(pts, profile){
   const url = `https://brouter.de/brouter?lonlats=${encodeURIComponent(lonlats)}&profile=${encodeURIComponent(profile)}&alternativeidx=0&format=geojson`;
   const r = await fetch(url, { method:'GET' });
   if(!r.ok) throw new Error('HTTP '+r.status);
-  // BRouter returns a GeoJSON FeatureCollection
-  return await r.json();
+  return await r.json(); // FeatureCollection
 }
 
 async function fetchOSRMFootGeoJSON(pts){
@@ -216,7 +264,7 @@ function updateDistance(km){
   distBadge.textContent = `${(km||0).toFixed(2)} km`;
 }
 
-/* ============== Elevation profile (with smoothing) ============== */
+/* ============== Elevation profile (high-accuracy) ============== */
 const elevWrap   = document.getElementById('elevWrap');
 const elevChart  = document.getElementById('elevChart');
 const statMin    = document.getElementById('statMin');
@@ -252,7 +300,6 @@ function movingAverage(arr, win){
 }
 function smoothSeries(raw, level){
   if(level==='none') return raw.slice();
-  // base windows by level
   const cfg = {
     low: { med:5, avg:7 },
     med: { med:5, avg:11 },
@@ -275,9 +322,9 @@ async function buildElevation(geo){
     const line = mergeToLineString(geo);
     if(!line) return hideElevation();
 
-    // sample up to 200 points along the route
+    // denser sampling: ~50 points/km, cap at 450
     const lengthKm = turf.length(line, {units:'kilometers'});
-    const samples  = Math.max(20, Math.min(200, Math.round(lengthKm * 30))); // ~30 pts per km, cap 200
+    const samples  = Math.max(30, Math.min(450, Math.round(lengthKm * 50)));
     const pts = [];
     for(let i=0;i<=samples;i++){
       const seg = turf.along(line, (lengthKm * i / samples), {units:'kilometers'});
@@ -285,10 +332,8 @@ async function buildElevation(geo){
       pts.push([y,x]); // lat,lon
     }
 
-    let elevations = await fetchElevationsOpenTopo(pts).catch(()=>null);
-    if(!elevations || elevations.some(v=>v==null)){
-      elevations = await fetchElevationsOpenElevation(pts);
-    }
+    // High-accuracy: EU-DEM 25m with SRTM fallback, cubic interpolation
+    const elevations = await fetchElevationsOpenTopo(pts);
 
     current_elev_cache = { latlngs: pts, elevs: elevations };
     renderElevation(pts, elevations);
@@ -298,31 +343,19 @@ async function buildElevation(geo){
   }
 }
 
+// OpenTopoData batching with dataset chain + cubic interpolation
 async function fetchElevationsOpenTopo(latlngs){
+  const DATASET = 'eudem25m,srtm90m'; // try EU-DEM first, then SRTM
   const BATCH = 100;
   const out = [];
-  for(let i=0;i<latlngs.length;i+=BATCH){
+  for (let i=0; i<latlngs.length; i+=BATCH){
     const chunk = latlngs.slice(i,i+BATCH)
       .map(([lat,lon]) => `${lat.toFixed(5)},${lon.toFixed(5)}`).join('|');
-    const url = `https://api.opentopodata.org/v1/srtm90m?locations=${encodeURIComponent(chunk)}`;
+    const url = `https://api.opentopodata.org/v1/${DATASET}` +
+                `?locations=${encodeURIComponent(chunk)}&interpolation=cubic`;
     const r = await fetch(url);
     const j = await r.json();
     if(!r.ok || !j || !j.results) throw new Error('OpenTopoData error');
-    j.results.forEach(res => out.push(res.elevation));
-  }
-  return out;
-}
-
-async function fetchElevationsOpenElevation(latlngs){
-  const BATCH = 100;
-  const out = [];
-  for(let i=0;i<latlngs.length;i+=BATCH){
-    const chunk = latlngs.slice(i,i+BATCH)
-      .map(([lat,lon]) => `${lat.toFixed(5)},${lon.toFixed(5)}`).join('|');
-    const url = `https://api.open-elevation.com/api/v1/lookup?locations=${encodeURIComponent(chunk)}`;
-    const r = await fetch(url);
-    const j = await r.json();
-    if(!r.ok || !j || !j.results) throw new Error('OpenElevation error');
     j.results.forEach(res => out.push(res.elevation));
   }
   return out;
@@ -431,53 +464,102 @@ function renderElevation(latlngs, elevsRaw){
 profileSel.addEventListener('change', ()=>{ if(waypoints.length>=2) computeRoute(); });
 
 /* ============== Exporters ============== */
-function ensureRoute(){
-  if(!currentGeo){ alert('No route to export'); return null; }
-  const name = (routeName.value || 'My Route').replace(/[<&>]/g,' ');
-  return { geo: currentGeo, name };
-}
+const btnGpx = document.getElementById('btnGpx');
+const btnKml = document.getElementById('btnKml');
+const btnGeo = document.getElementById('btnGeo');
 
-document.getElementById('btnGeo').onclick = ()=>{
-  const rt = ensureRoute(); if(!rt) return;
-  downloadText((routeName.value||'route')+'.geojson', JSON.stringify(rt.geo,null,2), 'application/geo+json');
-};
+btnGeo.addEventListener('click', ()=>{
+  if(!currentGeo){ alert('No route to export'); return; }
+  const name = (routeName.value || 'route') + '.geojson';
+  download(name, JSON.stringify(currentGeo, null, 2), 'application/geo+json');
+});
 
-document.getElementById('btnGpx').onclick = ()=>{
-  const rt = ensureRoute(); if(!rt) return;
-  const line = mergeToLineString(rt.geo);
-  const pts = line.geometry.coordinates.map(([x,y])=>`<trkpt lat="${y}" lon="${x}"></trkpt>`).join('');
-  const gpx = `<?xml version="1.0" encoding="UTF-8"?>
-<gpx version="1.1" creator="OSM Route Planner" xmlns="http://www.topografix.com/GPX/1/1">
-  <trk><name>${rt.name}</name><trkseg>${pts}</trkseg></trk>
-</gpx>`;
-  downloadText((routeName.value||'route')+'.gpx', gpx, 'application/gpx+xml');
-};
+btnGpx.addEventListener('click', ()=>{
+  const line = mergeToLineString(currentGeo || {});
+  if(!line){ alert('No route to export'); return; }
+  const name = (routeName.value || 'route') + '.gpx';
+  const gpx = toGPX(line, current_elev_cache);
+  download(name, gpx, 'application/gpx+xml');
+});
 
-document.getElementById('btnKml').onclick = ()=>{
-  const rt = ensureRoute(); if(!rt) return;
-  const line = mergeToLineString(rt.geo);
-  const coords = line.geometry.coordinates.map(([x,y])=>`${x},${y},0`).join(' ');
-  const kml = `<?xml version="1.0" encoding="UTF-8"?>
-<kml xmlns="http://www.opengis.net/kml/2.2"><Document>
-  <name>${rt.name}</name>
-  <Placemark><name>${rt.name}</name><LineString><coordinates>${coords}</coordinates></LineString></Placemark>
-</Document></kml>`;
-  downloadText((routeName.value||'route')+'.kml', kml, 'application/vnd.google-earth.kml+xml');
-};
+btnKml.addEventListener('click', ()=>{
+  const line = mergeToLineString(currentGeo || {});
+  if(!line){ alert('No route to export'); return; }
+  const name = (routeName.value || 'route') + '.kml';
+  const kml = toKML(line, current_elev_cache);
+  download(name, kml, 'application/vnd.google-earth.kml+xml');
+});
 
-function downloadText(filename, text, type){
+function download(filename, data, mime='application/octet-stream'){
+  const blob = new Blob([data], {type:mime});
+  const url  = URL.createObjectURL(blob);
   const a = document.createElement('a');
-  a.href = URL.createObjectURL(new Blob([text], {type}));
-  a.download = filename; a.click();
-  setTimeout(()=>URL.revokeObjectURL(a.href),0);
+  a.href = url; a.download = filename;
+  document.body.appendChild(a); a.click(); a.remove();
+  setTimeout(()=>URL.revokeObjectURL(url), 1000);
 }
 
-/* ============== Geolocate convenience ============== */
-if('geolocation' in navigator){
-  navigator.geolocation.getCurrentPosition(pos=>{
-    map.setView([pos.coords.latitude, pos.coords.longitude], 13);
-  });
+function toGPX(lineFeature, elevCache){
+  const coords = lineFeature.geometry.coordinates; // [lon,lat]
+  // Try to include elevation if cache length matches samples:
+  let elevs = null;
+  if(elevCache && Array.isArray(elevCache.elevs) && elevCache.elevs.length){
+    // resample elevations to match coords length
+    elevs = resampleArray(elevCache.elevs, coords.length);
+  }
+  const name = escapeXml(routeName.value || 'Route');
+  const trkpts = coords.map((c,i)=>{
+    const lon = c[0].toFixed(6), lat = c[1].toFixed(6);
+    const ele = elevs ? `<ele>${Number(elevs[i]).toFixed(1)}</ele>` : '';
+    return `<trkpt lat="${lat}" lon="${lon}">${ele}</trkpt>`;
+  }).join('');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<gpx version="1.1" creator="Leaflet+BRouter" xmlns="http://www.topografix.com/GPX/1/1">
+  <metadata><name>${name}</name></metadata>
+  <trk><name>${name}</name><trkseg>${trkpts}</trkseg></trk>
+</gpx>`;
 }
+
+function toKML(lineFeature, elevCache){
+  const coords = lineFeature.geometry.coordinates; // [lon,lat]
+  let elevs = null;
+  if(elevCache && Array.isArray(elevCache.elevs) && elevCache.elevs.length){
+    elevs = resampleArray(elevCache.elevs, coords.length);
+  }
+  const name = escapeXml(routeName.value || 'Route');
+  const coordStr = coords.map((c,i)=>{
+    const z = elevs ? Number(elevs[i]).toFixed(1) : '0';
+    return `${c[0].toFixed(6)},${c[1].toFixed(6)},${z}`;
+  }).join(' ');
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<kml xmlns="http://www.opengis.net/kml/2.2">
+  <Document>
+    <name>${name}</name>
+    <Placemark>
+      <name>${name}</name>
+      <Style><LineStyle><color>ff55c522</color><width>4</width></LineStyle></Style>
+      <LineString><tessellate>1</tessellate><coordinates>${coordStr}</coordinates></LineString>
+    </Placemark>
+  </Document>
+</kml>`;
+}
+
+function resampleArray(arr, n){
+  // simple linear resample from arr.length -> n
+  const out = new Array(n);
+  const m = arr.length;
+  for(let i=0;i<n;i++){
+    const t = (i*(m-1))/(n-1);
+    const i0 = Math.floor(t), i1 = Math.min(m-1, i0+1);
+    const a = arr[i0], b = arr[i1];
+    const frac = t - i0;
+    out[i] = a + (b - a) * frac;
+  }
+  return out;
+}
+
+function escapeXml(s){ return String(s).replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c])); }
+
 </script>
 </body>
 </html>
