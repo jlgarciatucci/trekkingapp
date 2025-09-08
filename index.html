@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
-<title>OSM Route Planner — BRouter + High-Accuracy Elevation</title>
+<title>OSM Route Planner — BRouter + Robust Elevation</title>
 
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
@@ -24,7 +24,6 @@
   .row{margin-top:8px}
   .ok{color:#86efac}.warn{color:#fde68a}.err{color:#fca5a5}
   .badge{background:#0b1220;border:1px solid #334155;border-radius:999px;padding:6px 10px;margin-left:8px}
-  .tip{opacity:.85;margin-left:6px}
 
   /* Elevation panel */
   #elevWrap{
@@ -37,7 +36,7 @@
   #elevChart{width:100%;height:160px;display:block;margin-top:8px;background:#091018;border-radius:8px}
   #elevHint{opacity:.75;font-size:12px;margin-left:auto}
 
-  /* Leaflet layers control for dark UI */
+  /* Layers control (dark UI) */
   .leaflet-control-layers{
     border-radius:12px; overflow:hidden;
     background:#111827; color:#e5e7eb; border:1px solid #334155;
@@ -100,51 +99,43 @@ const map = L.map('map').setView([41.387, 2.170], 12);
 
 // --- Base maps ---
 const osm = L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
-  maxZoom: 20,
-  attribution: '© OpenStreetMap contributors'
+  maxZoom: 20, attribution: '© OpenStreetMap contributors'
 });
 const esriSat = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
   'World_Imagery/MapServer/tile/{z}/{y}/{x}', {
-  maxZoom: 20,
-  attribution: 'Tiles © Esri — Sources: Esri, i-cubed, USDA, USGS, IGN, etc.'
+  maxZoom: 20, attribution: 'Tiles © Esri — Sources: Esri, USGS, IGN, etc.'
 });
 const esriLabels = L.tileLayer('https://server.arcgisonline.com/ArcGIS/rest/services/' +
   'Reference/World_Boundaries_and_Places/MapServer/tile/{z}/{y}/{x}', {
   maxZoom: 20, attribution: 'Labels © Esri'
 });
 const openTopo = L.tileLayer('https://{s}.tile.opentopomap.org/{z}/{x}/{y}.png', {
-  maxZoom: 17,
-  attribution: '© OpenStreetMap, SRTM — OpenTopoMap (CC-BY-SA)'
+  maxZoom: 17, attribution: '© OpenStreetMap, SRTM — OpenTopoMap (CC-BY-SA)'
 });
 const cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
   maxZoom: 20, attribution: '© OpenStreetMap, © CARTO'
 });
 osm.addTo(map);
 
-// Layers control
 const baseLayers = {
   "OSM Standard": osm,
   "Esri Satellite": esriSat,
   "OpenTopoMap": openTopo,
   "CARTO Dark": cartoDark
 };
-const overlays = {
-  "Labels (Esri)": esriLabels
-};
+const overlays = { "Labels (Esri)": esriLabels };
+
 L.control.layers(baseLayers, overlays, { position: 'topright', collapsed: true }).addTo(map);
 
-// Auto-show labels over satellite
+// Auto-show labels with satellite
 map.on('baselayerchange', (e) => {
-  if (e.name === 'Esri Satellite') {
-    if (!map.hasLayer(esriLabels)) esriLabels.addTo(map);
-  }
+  if (e.name === 'Esri Satellite' && !map.hasLayer(esriLabels)) esriLabels.addTo(map);
 });
 
 const profileSel = document.getElementById('profile');
 const distBadge  = document.getElementById('dist');
 const statusEl   = document.getElementById('status');
 const routeName  = document.getElementById('routeName');
-
 function status(msg, cls='ok'){ statusEl.className = cls; statusEl.textContent = msg; }
 
 /* ============== Waypoints & markers ============== */
@@ -199,7 +190,7 @@ async function computeRoute(){
     const geo = await fetchBRouterGeoJSON(waypoints, profileSel.value);
     drawRouteGeoJSON(geo);
     status('ok (BRouter)','ok');
-    buildElevation(geo);
+    await buildElevation(geo);
   }catch(err){
     console.warn('BRouter failed:', err);
     status('BRouter failed → trying OSRM foot…','warn');
@@ -207,7 +198,7 @@ async function computeRoute(){
       const geo = await fetchOSRMFootGeoJSON(waypoints);
       drawRouteGeoJSON(geo);
       status('ok (OSRM foot fallback)','ok');
-      buildElevation(geo);
+      await buildElevation(geo);
     }catch(e2){
       console.error('OSRM fallback failed:', e2);
       status('routing failed on all services','err');
@@ -264,7 +255,7 @@ function updateDistance(km){
   distBadge.textContent = `${(km||0).toFixed(2)} km`;
 }
 
-/* ============== Elevation profile (high-accuracy) ============== */
+/* ============== Elevation profile (robust) ============== */
 const elevWrap   = document.getElementById('elevWrap');
 const elevChart  = document.getElementById('elevChart');
 const statMin    = document.getElementById('statMin');
@@ -301,9 +292,9 @@ function movingAverage(arr, win){
 function smoothSeries(raw, level){
   if(level==='none') return raw.slice();
   const cfg = {
-    low: { med:5, avg:7 },
-    med: { med:5, avg:11 },
-    high:{ med:7, avg:15 }
+    low:  { med:5, avg:7  },
+    med:  { med:5, avg:11 },
+    high: { med:7, avg:15 }
   }[level] || { med:5, avg:7 };
   const m = medianFilter(raw, cfg.med);
   return movingAverage(m, cfg.avg);
@@ -317,46 +308,99 @@ smoothSel.addEventListener('change', ()=> {
 
 let current_elev_cache = null;
 
+// Helper: detect if route roughly lies in Europe to pick EU-DEM
+function routeInEurope(lineFeature){
+  // rough Europe bbox [W,S,E,N]
+  const EUROPE_BBOX = [-31.5, 27.5, 45.5, 71.5];
+  try {
+    const bb = turf.bbox(lineFeature); // [minX, minY, maxX, maxY]
+    const cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2;
+    return (cx >= EUROPE_BBOX[0] && cx <= EUROPE_BBOX[2] &&
+            cy >= EUROPE_BBOX[1] && cy <= EUROPE_BBOX[3]);
+  } catch { return false; }
+}
+
 async function buildElevation(geo){
   try{
     const line = mergeToLineString(geo);
-    if(!line) return hideElevation();
+    if(!line) { hideElevation(); return; }
 
-    // denser sampling: ~50 points/km, cap at 450
     const lengthKm = turf.length(line, {units:'kilometers'});
-    const samples  = Math.max(30, Math.min(450, Math.round(lengthKm * 50)));
+
+    // modest sampling: ~20 pts/km (cap 250) → fewer rate limits and shorter URLs
+    const samples = Math.max(30, Math.min(250, Math.round(lengthKm * 20)));
+
     const pts = [];
-    for(let i=0;i<=samples;i++){
+    for (let i=0;i<=samples;i++){
       const seg = turf.along(line, (lengthKm * i / samples), {units:'kilometers'});
       const [x,y] = seg.geometry.coordinates;
       pts.push([y,x]); // lat,lon
     }
 
-    // High-accuracy: EU-DEM 25m with SRTM fallback, cubic interpolation
-    const elevations = await fetchElevationsOpenTopo(pts);
+    // Choose dataset: EU → eudem25m, otherwise srtm90m
+    const dataset = routeInEurope(line) ? 'eudem25m' : 'srtm90m';
+
+    const elevations = await fetchElevationsRobust(pts, dataset);
+
+    if (!elevations || elevations.every(v => v == null)){
+      status('Elevation unavailable (all providers failed)', 'warn');
+      hideElevation();
+      return;
+    }
 
     current_elev_cache = { latlngs: pts, elevs: elevations };
     renderElevation(pts, elevations);
   }catch(err){
     console.warn('Elevation failed:', err);
+    status('Elevation error (see console)', 'warn');
     hideElevation();
   }
 }
 
-// OpenTopoData batching with dataset chain + cubic interpolation
-async function fetchElevationsOpenTopo(latlngs){
-  const DATASET = 'eudem25m,srtm90m'; // try EU-DEM first, then SRTM
+// Robust fetch: OpenTopoData first (batched, cubic), fallback to Open-Elevation (batched).
+async function fetchElevationsRobust(latlngs, dataset='srtm90m'){
+  try {
+    const vals = await fetchOpenTopoData(latlngs, dataset);
+    if (vals && vals.some(v => v != null)) return vals;
+  } catch (e) {
+    console.warn('OpenTopoData error:', e);
+  }
+  try {
+    const vals2 = await fetchOpenElevation(latlngs);
+    return vals2;
+  } catch (e2) {
+    console.warn('Open-Elevation error:', e2);
+  }
+  return new Array(latlngs.length).fill(null);
+}
+
+async function fetchOpenTopoData(latlngs, dataset){
+  const BATCH = 80; // keep URLs short/reliable
+  const out = [];
+  for (let i=0; i<latlngs.length; i+=BATCH){
+    const chunk = latlngs.slice(i, i+BATCH)
+      .map(([lat,lon]) => `${lat.toFixed(5)},${lon.toFixed(5)}`).join('|');
+    const url = `https://api.opentopodata.org/v1/${dataset}` +
+                `?locations=${encodeURIComponent(chunk)}&interpolation=cubic`;
+    const r = await fetch(url);
+    const j = await r.json().catch(()=>null);
+    if (!r.ok || !j || !j.results) throw new Error(`OpenTopoData ${r.status}`);
+    j.results.forEach(res => out.push(res ? res.elevation : null));
+  }
+  return out;
+}
+
+async function fetchOpenElevation(latlngs){
   const BATCH = 100;
   const out = [];
   for (let i=0; i<latlngs.length; i+=BATCH){
-    const chunk = latlngs.slice(i,i+BATCH)
+    const chunk = latlngs.slice(i, i+BATCH)
       .map(([lat,lon]) => `${lat.toFixed(5)},${lon.toFixed(5)}`).join('|');
-    const url = `https://api.opentopodata.org/v1/${DATASET}` +
-                `?locations=${encodeURIComponent(chunk)}&interpolation=cubic`;
+    const url = `https://api.open-elevation.com/api/v1/lookup?locations=${encodeURIComponent(chunk)}`;
     const r = await fetch(url);
-    const j = await r.json();
-    if(!r.ok || !j || !j.results) throw new Error('OpenTopoData error');
-    j.results.forEach(res => out.push(res.elevation));
+    const j = await r.json().catch(()=>null);
+    if (!r.ok || !j || !j.results) throw new Error(`Open-Elevation ${r.status}`);
+    j.results.forEach(res => out.push(res ? res.elevation : null));
   }
   return out;
 }
@@ -501,11 +545,9 @@ function download(filename, data, mime='application/octet-stream'){
 
 function toGPX(lineFeature, elevCache){
   const coords = lineFeature.geometry.coordinates; // [lon,lat]
-  // Try to include elevation if cache length matches samples:
   let elevs = null;
   if(elevCache && Array.isArray(elevCache.elevs) && elevCache.elevs.length){
-    // resample elevations to match coords length
-    elevs = resampleArray(elevCache.elevs, coords.length);
+    elevs = resampleArray(elevCache.elevs, coords.length); // resample to match
   }
   const name = escapeXml(routeName.value || 'Route');
   const trkpts = coords.map((c,i)=>{
