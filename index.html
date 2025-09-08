@@ -5,7 +5,7 @@
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>OSM Route Planner — BRouter + Robust Elevation</title>
 
-<!-- keep your original CDNs (working for you) -->
+<!-- Your original CDNs (kept) -->
 <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
 <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
 <script src="https://unpkg.com/@turf/turf@7.1.0/turf.min.js"></script>
@@ -40,7 +40,7 @@
   #elevChart{width:100%;height:160px;display:block;margin-top:8px;background:#091018;border-radius:8px}
   #elevHint{opacity:.75;font-size:12px;margin-left:auto}
 
-  /* Toggle button for elevation */
+  /* Toggle button for elevation (mobile sheet) */
   #toggleElev{
     position:absolute; right:12px; bottom:12px; z-index:9999;
     width:48px; height:48px; border-radius:999px; display:flex; align-items:center; justify-content:center;
@@ -54,7 +54,9 @@
     border-radius:12px; overflow:hidden;
     background:#111827; color:#e5e7eb; border:1px solid #334155;
   }
-  .leaflet-control-layers-expanded{ background:#111827; color:#e5e7eb; }
+  .leaflet-control-layers-expanded{
+    background:#111827; color:#e5e7eb;
+  }
   .leaflet-control-layers-list label{ color:#e5e7eb; }
 
   /* ---------- Mobile layout tweaks ---------- */
@@ -79,11 +81,14 @@
     #elevWrap.open{
       opacity:1; transform:translateY(0); pointer-events:auto;
     }
-    /* Show a shorter chart on mobile so the UI doesn't get buried */
+    /* Shorter chart on mobile */
     #elevChart{ height:140px; }
 
     /* Show the toggle FAB on mobile */
     #toggleElev{ display:flex; }
+
+    /* Hide Leaflet’s built-in layers control on mobile (we use our dropdown) */
+    .leaflet-control-layers { display:none !important; }
   }
 </style>
 </head>
@@ -99,6 +104,17 @@
       <option value="trekking">trekking (bike/hike mix)</option>
     </select>
     <span id="dist" class="badge">0.00 km</span>
+
+    <!-- Basemap dropdown (mobile-friendly, always visible) -->
+    <label style="margin-left:8px">
+      Basemap
+      <select id="basemapSel">
+        <option value="osm">OSM</option>
+        <option value="sat">Satellite</option>
+        <option value="topo">Topo</option>
+        <option value="dark">Dark</option>
+      </select>
+    </label>
   </div>
   <div class="row">
     <input id="routeName" placeholder="Route name" size="16" />
@@ -170,9 +186,49 @@ const overlays = { "Labels (Esri)": esriLabels };
 
 L.control.layers(baseLayers, overlays, { position: 'topright', collapsed: true }).addTo(map);
 
-// Auto-show labels with satellite
+// Auto-show labels with satellite when using Leaflet control
 map.on('baselayerchange', (e) => {
   if (e.name === 'Esri Satellite' && !map.hasLayer(esriLabels)) esriLabels.addTo(map);
+  if (e.name !== 'Esri Satellite' && map.hasLayer(esriLabels)) esriLabels.remove();
+});
+
+// ---- Basemap dropdown control (mobile-friendly) ----
+const basemapSel = document.getElementById('basemapSel');
+let currentBase = osm; // default added first
+function setBasemap(key){
+  if (currentBase) map.removeLayer(currentBase);
+
+  if (key === 'osm') {
+    currentBase = osm;
+    if (map.hasLayer(esriLabels)) map.removeLayer(esriLabels);
+  } else if (key === 'sat') {
+    currentBase = esriSat;
+    if (!map.hasLayer(esriLabels)) esriLabels.addTo(map);
+  } else if (key === 'topo') {
+    currentBase = openTopo;
+    if (map.hasLayer(esriLabels)) map.removeLayer(esriLabels);
+  } else if (key === 'dark') {
+    currentBase = cartoDark;
+    if (map.hasLayer(esriLabels)) map.removeLayer(esriLabels);
+  } else {
+    currentBase = osm;
+    if (map.hasLayer(esriLabels)) map.removeLayer(esriLabels);
+  }
+  currentBase.addTo(map);
+}
+// initialize dropdown to match current layer (osm by default)
+if (basemapSel) {
+  basemapSel.value = 'osm';
+  basemapSel.addEventListener('change', (e)=> setBasemap(e.target.value));
+}
+// keep dropdown in sync if user uses desktop Layers control
+map.on('baselayerchange', (e) => {
+  const name = e.name || '';
+  if (!basemapSel) return;
+  if (name.includes('OSM')) basemapSel.value = 'osm';
+  else if (name.includes('Satellite')) basemapSel.value = 'sat';
+  else if (name.includes('OpenTopo')) basemapSel.value = 'topo';
+  else if (name.includes('CARTO Dark')) basemapSel.value = 'dark';
 });
 
 const profileSel = document.getElementById('profile');
@@ -225,15 +281,6 @@ document.getElementById('btnClear').onclick = ()=>{
   updateDistance(0);
   status('cleared','ok');
 };
-
-/* Mobile: toggle button shows/hides elevation sheet */
-toggleElev.addEventListener('click', ()=>{
-  if (elevWrap.style.display === 'none') return; // nothing to show
-  elevWrap.classList.toggle('open');
-  toggleElev.textContent = elevWrap.classList.contains('open') ? '⌄' : '⌃';
-  // reflow chart after transition
-  setTimeout(()=>{ if(current_elev_cache) renderElevation(current_elev_cache.latlngs, current_elev_cache.elevs); }, 220);
-});
 
 /* ============== Routing (BRouter first, OSRM foot fallback) ============== */
 async function computeRoute(){
@@ -361,7 +408,7 @@ function smoothSeries(raw, level){
 
 smoothSel.addEventListener('change', ()=> {
   if(current_elev_cache){
-    renderElevation(current_elev_cache.latlngs, current_elev_cache.elevs);
+    renderElevation(current_elev_cache.latlngs, current_elev_cache.elevs); // re-render with new smoothing
   }
 });
 
@@ -369,9 +416,10 @@ let current_elev_cache = null;
 
 // Helper: detect if route roughly lies in Europe to pick EU-DEM
 function routeInEurope(lineFeature){
+  // rough Europe bbox [W,S,E,N]
   const EUROPE_BBOX = [-31.5, 27.5, 45.5, 71.5];
   try {
-    const bb = turf.bbox(lineFeature);
+    const bb = turf.bbox(lineFeature); // [minX, minY, maxX, maxY]
     const cx = (bb[0] + bb[2]) / 2, cy = (bb[1] + bb[3]) / 2;
     return (cx >= EUROPE_BBOX[0] && cx <= EUROPE_BBOX[2] &&
             cy >= EUROPE_BBOX[1] && cy <= EUROPE_BBOX[3]);
@@ -384,6 +432,8 @@ async function buildElevation(geo){
     if(!line) { hideElevation(); return; }
 
     const lengthKm = turf.length(line, {units:'kilometers'});
+
+    // modest sampling: ~20 pts/km (cap 250) → fewer rate limits and shorter URLs
     const samples = Math.max(30, Math.min(250, Math.round(lengthKm * 20)));
 
     const pts = [];
@@ -393,7 +443,9 @@ async function buildElevation(geo){
       pts.push([y,x]); // lat,lon
     }
 
+    // Choose dataset: EU → eudem25m, otherwise srtm90m
     const dataset = routeInEurope(line) ? 'eudem25m' : 'srtm90m';
+
     const elevations = await fetchElevationsRobust(pts, dataset);
 
     if (!elevations || elevations.every(v => v == null)){
@@ -405,9 +457,8 @@ async function buildElevation(geo){
     current_elev_cache = { latlngs: pts, elevs: elevations };
     renderElevation(pts, elevations);
 
-    // show panel now (desktop always visible; mobile as sheet)
+    // show panel now (desktop visible; mobile starts opened a bit)
     elevWrap.style.display = 'block';
-    // If on mobile, open the sheet slightly; on desktop it's just visible.
     if (window.matchMedia('(max-width: 768px)').matches){
       elevWrap.classList.add('open');
       toggleElev.textContent = '⌄';
@@ -419,26 +470,31 @@ async function buildElevation(geo){
   }
 }
 
-// OpenTopoData first, fallback Open-Elevation
+// Robust fetch: OpenTopoData first (batched, cubic), fallback to Open-Elevation (batched).
 async function fetchElevationsRobust(latlngs, dataset='srtm90m'){
   try {
     const vals = await fetchOpenTopoData(latlngs, dataset);
     if (vals && vals.some(v => v != null)) return vals;
-  } catch (e) { console.warn('OpenTopoData error:', e); }
+  } catch (e) {
+    console.warn('OpenTopoData error:', e);
+  }
   try {
     const vals2 = await fetchOpenElevation(latlngs);
     return vals2;
-  } catch (e2) { console.warn('Open-Elevation error:', e2); }
+  } catch (e2) {
+    console.warn('Open-Elevation error:', e2);
+  }
   return new Array(latlngs.length).fill(null);
 }
 
 async function fetchOpenTopoData(latlngs, dataset){
-  const BATCH = 80;
+  const BATCH = 80; // keep URLs short/reliable
   const out = [];
   for (let i=0; i<latlngs.length; i+=BATCH){
     const chunk = latlngs.slice(i, i+BATCH)
       .map(([lat,lon]) => `${lat.toFixed(5)},${lon.toFixed(5)}`).join('|');
-    const url = `https://api.opentopodata.org/v1/${dataset}?locations=${encodeURIComponent(chunk)}&interpolation=cubic`;
+    const url = `https://api.opentopodata.org/v1/${dataset}` +
+                `?locations=${encodeURIComponent(chunk)}&interpolation=cubic`;
     const r = await fetch(url);
     const j = await r.json().catch(()=>null);
     if (!r.ok || !j || !j.results) throw new Error(`OpenTopoData ${r.status}`);
@@ -465,10 +521,11 @@ async function fetchOpenElevation(latlngs){
 function renderElevation(latlngs, elevsRaw){
   if(!elevsRaw || !elevsRaw.length) return hideElevation();
 
+  // smooth it
   const level = smoothSel.value;
   const elevs = smoothSeries(elevsRaw, level);
 
-  // stats
+  // Compute stats on smoothed series
   let min = Infinity, max = -Infinity, gain = 0, loss = 0;
   for(let i=0;i<elevs.length;i++){
     const z = elevs[i]; if(z==null) continue;
@@ -478,12 +535,13 @@ function renderElevation(latlngs, elevsRaw){
       if(dz>0) gain += dz; else loss += -dz;
     }
   }
+
   statMin.textContent  = `Min: ${Math.round(min)} m`;
   statMax.textContent  = `Max: ${Math.round(max)} m`;
   statGain.textContent = `Ascent: ${Math.round(gain)} m`;
   statLoss.textContent = `Descent: ${Math.round(loss)} m`;
 
-  // SVG
+  // Build SVG
   const W = elevChart.clientWidth || 600;
   const H = elevChart.clientHeight || 160;
   const pad = 24;
@@ -495,12 +553,15 @@ function renderElevation(latlngs, elevsRaw){
   const scaleX = (i)=> pad + (i/(elevs.length-1))*w;
   const scaleY = (z)=> pad + h - ((z - eMin) / (eMax - eMin || 1)) * h;
 
+  // Path
   let d = '';
   for(let i=0;i<elevs.length;i++){
     const x = scaleX(i), y = scaleY(elevs[i]);
     d += (i===0 ? `M ${x} ${y}` : ` L ${x} ${y}`);
   }
   const area = `${d} L ${pad + w} ${pad + h} L ${pad} ${pad + h} Z`;
+
+  // Axis ticks
   const ticks = [eMin, (eMin+eMax)/2, eMax];
 
   elevChart.innerHTML = `
@@ -513,13 +574,14 @@ function renderElevation(latlngs, elevsRaw){
     <rect x="0" y="0" width="${W}" height="${H}" fill="transparent"/>
     <path d="${area}" fill="url(#grad)"></path>
     <path d="${d}" fill="none" stroke="#22c55e" stroke-width="2"></path>
-    ${ticks.map((t)=>{ const y = scaleY(t);
-      return `<line x1="${pad}" y1="${y}" x2="${pad+w}" stroke="#223" stroke-dasharray="3,3"/>
+    ${ticks.map((t,i)=>{
+      const y = scaleY(t);
+      return `<line x1="${pad}" y1="${y}" x2="${pad+w}" y2="${y}" stroke="#223" stroke-dasharray="3,3"/>
               <text x="${pad-6}" y="${y+4}" text-anchor="end" fill="#9ca3af" font-size="11">${Math.round(t)} m</text>`;
     }).join('')}
   `;
 
-  // Hover tooltip
+  // Hover/Touch tooltip
   const tooltip = document.createElementNS('http://www.w3.org/2000/svg','g');
   const line   = document.createElementNS('http://www.w3.org/2000/svg','line');
   const dot    = document.createElementNS('http://www.w3.org/2000/svg','circle');
@@ -539,7 +601,8 @@ function renderElevation(latlngs, elevsRaw){
 
   function updateTip(evt){
     const rect = elevChart.getBoundingClientRect();
-    const x = (evt.touches ? evt.touches[0].clientX : evt.clientX) - rect.left;
+    const clientX = evt.touches ? evt.touches[0].clientX : evt.clientX;
+    const x = clientX - rect.left;
     const i = nearestIndex(x);
     const xi = scaleX(i), yi = scaleY(elevs[i]);
     tooltip.style.display = '';
@@ -550,6 +613,7 @@ function renderElevation(latlngs, elevsRaw){
     const distAt = (distTotal * (i/(elevs.length-1)));
     label.textContent = `${Math.round(elevs[i])} m @ ${distAt.toFixed(2)} km`;
   }
+
   elevChart.onmousemove = updateTip;
   elevChart.ontouchstart = updateTip;
   elevChart.ontouchmove = updateTip;
@@ -653,6 +717,15 @@ function resampleArray(arr, n){
 }
 
 function escapeXml(s){ return String(s).replace(/[<>&'"]/g, c => ({'<':'&lt;','>':'&gt;','&':'&amp;',"'":'&apos;','"':'&quot;'}[c])); }
+
+/* ============== Mobile: elevation toggle ============== */
+toggleElev.addEventListener('click', ()=>{
+  if (elevWrap.style.display === 'none') return; // nothing to show
+  elevWrap.classList.toggle('open');
+  toggleElev.textContent = elevWrap.classList.contains('open') ? '⌄' : '⌃';
+  // reflow chart after transition
+  setTimeout(()=>{ if(current_elev_cache) renderElevation(current_elev_cache.latlngs, current_elev_cache.elevs); }, 220);
+});
 </script>
 </body>
 </html>
