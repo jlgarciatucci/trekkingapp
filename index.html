@@ -69,6 +69,15 @@
     outline:none;
   }
 
+  /* Bottom-left Waymarked overlay toggle (mobile-friendly) */
+  #overlayCtrl{
+    position:absolute; left:12px; bottom:64px; z-index:9999;
+    background:#111827; border:1px solid #334155; border-radius:8px;
+    padding:6px 10px; box-shadow:0 4px 12px rgba(0,0,0,.35); color:#e5e7eb;
+    font-family:system-ui,-apple-system,Segoe UI,Roboto; font-size:14px;
+  }
+  #overlayCtrl input{ vertical-align:middle; margin-right:6px }
+
   /* Layers control (dark UI) */
   .leaflet-control-layers{
     border-radius:12px; overflow:hidden;
@@ -107,6 +116,9 @@
 
     /* Hide Leaflet’s built-in layers control on mobile (we use bottom-left selector) */
     .leaflet-control-layers { display:none !important; }
+
+    /* Lift the overlay toggle a bit above the FAB/basemap */
+    #overlayCtrl{ bottom:68px; left:12px; right:auto }
   }
 </style>
 </head>
@@ -129,6 +141,9 @@
     <button id="btnKml">KML</button>
     <button id="btnGeo">GeoJSON</button>
     <button id="btnClear">Clear</button>
+    <!-- Load GPX -->
+    <button id="btnLoadGpx">Load GPX</button>
+    <input type="file" id="gpxFile" accept=".gpx" style="display:none" />
     <span id="status" class="ok">click/tap to add Start → End → Via… (drag markers; long-press/right-click to remove)</span>
   </div>
 </div>
@@ -146,6 +161,11 @@
   </select>
 </div>
 
+<!-- Bottom-left Waymarked Trails overlay toggle -->
+<div id="overlayCtrl" title="Waymarked Trails overlay">
+  <label><input type="checkbox" id="wmToggle"> Waymarked Trails (Hiking)</label>
+</div>
+
 <!-- Elevation panel -->
 <div id="elevWrap" style="display:none">
   <div id="elevHeader">
@@ -154,17 +174,7 @@
     <span class="stat" id="statMax">Max: —</span>
     <span class="stat" id="statGain">Ascent: —</span>
     <span class="stat" id="statLoss">Descent: —</span>
-
-    <label style="margin-left:12px">Smoothing
-      <select id="smoothLevel">
-        <option value="none">None</option>
-        <option value="low" selected>Low</option>
-        <option value="med">Medium</option>
-        <option value="high">High</option>
-      </select>
-    </label>
-
-    <span id="elevHint">hover/drag on chart to see values</span>
+    <span id="elevHint">smoothing: medium</span>
   </div>
   <svg id="elevChart"></svg>
 </div>
@@ -193,6 +203,16 @@ const cartoDark = L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x
 });
 osm.addTo(map);
 
+// ---- Waymarked Trails overlay (Hiking) ----
+const waymarkedHiking = L.tileLayer(
+  'https://tile.waymarkedtrails.org/hiking/{z}/{x}/{y}.png',
+  {
+    maxZoom: 20,
+    opacity: 0.9,
+    attribution: '© waymarkedtrails.org, © OpenStreetMap contributors'
+  }
+);
+
 // Leaflet layers control (desktop)
 const baseLayers = {
   "OSM Standard": osm,
@@ -200,7 +220,10 @@ const baseLayers = {
   "OpenTopoMap": openTopo,
   "CARTO Dark": cartoDark
 };
-const overlays = { "Labels (Esri)": esriLabels };
+const overlays = {
+  "Labels (Esri)": esriLabels,
+  "Waymarked Trails (Hiking)": waymarkedHiking
+};
 L.control.layers(baseLayers, overlays, { position: 'topright', collapsed: true }).addTo(map);
 
 // Auto-show labels with satellite when using Leaflet control
@@ -250,6 +273,23 @@ map.on('baselayerchange', (e) => {
   else if (name.includes('Dark')) basemapSel.value = 'dark';
 });
 
+// ---- Mobile-friendly Waymarked overlay toggle ----
+const wmToggle = document.getElementById('wmToggle');
+wmToggle.addEventListener('change', (e) => {
+  if (e.target.checked) {
+    waymarkedHiking.addTo(map);
+  } else {
+    map.removeLayer(waymarkedHiking);
+  }
+});
+// keep checkbox state in sync with desktop control
+map.on('overlayadd',   e => { if (e.layer === waymarkedHiking) wmToggle.checked = true;  });
+map.on('overlayremove',e => { if (e.layer === waymarkedHiking) wmToggle.checked = false; });
+
+// default off
+wmToggle.checked = map.hasLayer(waymarkedHiking);
+
+/* ============== UI refs ============== */
 const profileSel = document.getElementById('profile');
 const distBadge  = document.getElementById('dist');
 const statusEl   = document.getElementById('status');
@@ -382,7 +422,6 @@ const statMin    = document.getElementById('statMin');
 const statMax    = document.getElementById('statMax');
 const statGain   = document.getElementById('statGain');
 const statLoss   = document.getElementById('statLoss');
-const smoothSel  = document.getElementById('smoothLevel');
 
 function hideElevation(){
   elevWrap.style.display = 'none';
@@ -425,12 +464,6 @@ function smoothSeries(raw, level){
   return movingAverage(m, cfg.avg);
 }
 
-smoothSel.addEventListener('change', ()=> {
-  if(current_elev_cache){
-    renderElevation(current_elev_cache.latlngs, current_elev_cache.elevs); // re-render with new smoothing
-  }
-});
-
 let current_elev_cache = null;
 
 // Helper: detect if route roughly lies in Europe to pick EU-DEM
@@ -462,8 +495,8 @@ async function buildElevation(geo){
       pts.push([y,x]); // lat,lon
     }
 
-    // Choose dataset: EU → eudem25m, otherwise srtm90m
-    const dataset = routeInEurope(line) ? 'eudem25m' : 'srtm90m';
+    // Choose dataset: EU → eudem25m, otherwise srtm30m
+    const dataset = routeInEurope(line) ? 'eudem25m' : 'srtm30m';
 
     const elevations = await fetchElevationsRobust(pts, dataset);
 
@@ -490,7 +523,7 @@ async function buildElevation(geo){
 }
 
 // Robust fetch: OpenTopoData first (batched, cubic), fallback to Open-Elevation (batched).
-async function fetchElevationsRobust(latlngs, dataset='srtm90m'){
+async function fetchElevationsRobust(latlngs, dataset='srtm30m'){
   try {
     const vals = await fetchOpenTopoData(latlngs, dataset);
     if (vals && vals.some(v => v != null)) return vals;
@@ -540,9 +573,8 @@ async function fetchOpenElevation(latlngs){
 function renderElevation(latlngs, elevsRaw){
   if(!elevsRaw || !elevsRaw.length) return hideElevation();
 
-  // smooth it
-  const level = smoothSel.value;
-  const elevs = smoothSeries(elevsRaw, level);
+  // always use MEDIUM smoothing
+  const elevs = smoothSeries(elevsRaw, 'med');
 
   // Compute stats on smoothed series
   let min = Infinity, max = -Infinity, gain = 0, loss = 0;
@@ -745,6 +777,124 @@ toggleElev.addEventListener('click', ()=>{
   // reflow chart after transition
   setTimeout(()=>{ if(current_elev_cache) renderElevation(current_elev_cache.latlngs, current_elev_cache.elevs); }, 220);
 });
+
+/* ============== GPX Loader (no external libs) ============== */
+const btnLoadGpx = document.getElementById('btnLoadGpx');
+const gpxFileInp = document.getElementById('gpxFile');
+
+btnLoadGpx.addEventListener('click', ()=> gpxFileInp.click());
+
+gpxFileInp.addEventListener('change', async (e)=>{
+  const file = e.target.files && e.target.files[0];
+  if(!file) return;
+  try{
+    status('Loading GPX…','warn');
+    const text = await file.text();
+    const geo = parseGPXtoGeoJSON(text);
+
+    if(!geo || !geo.features || !geo.features.length){
+      status('No LineString found in GPX','err');
+      return;
+    }
+
+    // draw and compute elevation (prefer GPX <ele> if present)
+    drawRouteGeoJSON(geo);
+
+    // If GPX included elevations, use those directly for the chart.
+    const elevFromGpx = extractElevProfileFromGeo(geo);
+    if(elevFromGpx && elevFromGpx.latlngs && elevFromGpx.elevs && elevFromGpx.elevs.some(v=>v!=null)){
+      current_elev_cache = elevFromGpx;
+      renderElevation(elevFromGpx.latlngs, elevFromGpx.elevs);
+      elevWrap.style.display = 'block';
+      if (window.matchMedia('(max-width: 768px)').matches){
+        elevWrap.classList.add('open');
+        toggleElev.textContent = '⌄';
+      }
+      status('GPX loaded (with elevation)','ok');
+    }else{
+      await buildElevation(geo); // fall back to providers
+      status('GPX loaded','ok');
+    }
+
+    // Sync route name with file name (optional)
+    const baseName = file.name.replace(/\.[^.]+$/,'');
+    if(!routeName.value) routeName.value = baseName;
+
+    // Clear waypoints (so routing clicks don’t mix with a loaded track)
+    waypoints = [];
+    redrawMarkers();
+  }catch(err){
+    console.error(err);
+    status('Failed to load GPX','err');
+  }finally{
+    gpxFileInp.value = ''; // reset so selecting the same file again retriggers
+  }
+});
+
+/* ---- GPX parsing helpers ---- */
+function parseGPXtoGeoJSON(xmlText){
+  const parser = new DOMParser();
+  const xml = parser.parseFromString(xmlText, 'application/xml');
+  // Tracks
+  const trksegs = Array.from(xml.getElementsByTagName('trkseg'));
+  const features = [];
+  trksegs.forEach(seg=>{
+    const pts = Array.from(seg.getElementsByTagName('trkpt')).map(pt=>{
+      const lat = parseFloat(pt.getAttribute('lat'));
+      const lon = parseFloat(pt.getAttribute('lon'));
+      const eleEl = pt.getElementsByTagName('ele')[0];
+      const ele = eleEl ? parseFloat(eleEl.textContent) : null;
+      return {lat, lon, ele};
+    }).filter(p=>isFinite(p.lat) && isFinite(p.lon));
+    if(pts.length>=2){
+      features.push({
+        type:'Feature',
+        properties:{ source:'gpx', hasElevation: pts.some(p=>p.ele!=null) },
+        geometry:{ type:'LineString', coordinates: pts.map(p=>[p.lon, p.lat, p.ele!=null?p.ele:undefined]) }
+      });
+    }
+  });
+
+  // Routes (fallback if no tracks)
+  if(features.length===0){
+    const rtepts = Array.from(xml.getElementsByTagName('rtept')).map(pt=>{
+      const lat = parseFloat(pt.getAttribute('lat'));
+      const lon = parseFloat(pt.getAttribute('lon'));
+      const eleEl = pt.getElementsByTagName('ele')[0];
+      const ele = eleEl ? parseFloat(eleEl.textContent) : null;
+      return {lat, lon, ele};
+    }).filter(p=>isFinite(p.lat) && isFinite(p.lon));
+    if(rtepts.length>=2){
+      features.push({
+        type:'Feature',
+        properties:{ source:'gpx-route', hasElevation: rtepts.some(p=>p.ele!=null) },
+        geometry:{ type:'LineString', coordinates: rtepts.map(p=>[p.lon, p.lat, p.ele!=null?p.ele:undefined]) }
+      });
+    }
+  }
+
+  if(features.length===0) return null;
+
+  return { type:'FeatureCollection', features };
+}
+
+function extractElevProfileFromGeo(fc){
+  // Merge to LineString (lon,lat,ele?)
+  const line = mergeToLineString(fc);
+  if(!line) return null;
+
+  const coords = line.geometry.coordinates; // [lon,lat,(ele?)]
+  const latlngs = coords.map(c=>[c[1], c[0]]);
+  let elevs = coords.map(c => (c.length>=3 && isFinite(c[2])) ? Number(c[2]) : null);
+
+  // If less than 20% of points have elevation, treat as missing
+  const present = elevs.filter(v=>v!=null).length;
+  if(present/Math.max(1,elevs.length) < 0.2){
+    elevs = elevs.map(_=>null);
+  }
+
+  return { latlngs, elevs };
+}
 </script>
 </body>
 </html>
