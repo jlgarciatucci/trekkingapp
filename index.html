@@ -23,7 +23,7 @@
     background:#0b1220;color:#e5e7eb;border:1px solid #334155;border-radius:10px;
     padding:8px 10px;margin-right:6px; outline:none
   }
-  .row{margin-top:8px}
+  .row{margin-top:8px; font-family: Segoe UI;}
   .ok{color:#86efac}.warn{color:#fde68a}.err{color:#fca5a5}
   .badge{background:#0b1220;border:1px solid #334155;border-radius:999px;padding:6px 10px;margin-left:8px}
 
@@ -34,7 +34,7 @@
     padding:10px 12px;box-shadow:0 6px 20px rgba(0,0,0,.35);
     transition:height .18s ease, transform .18s ease, opacity .18s ease;
   }
-  #elevHeader{display:flex;gap:10px;align-items:center;flex-wrap:wrap}
+  #elevHeader{display:flex;gap:10px;align-items:center;flex-wrap:wrap; font-family: Roboto;}
   #elevHeader .stat{background:#111827;border:1px solid #334155;border-radius:10px;padding:4px 8px}
   #elevChart{width:100%;height:160px;display:block;margin-top:8px;background:#091018;border-radius:8px}
   #elevHint{opacity:.75;font-size:12px;margin-left:auto}
@@ -127,7 +127,7 @@
 
 <div class="ui">
   <div class="row">
-    <b>BRouter profile</b>
+    <b>Routing:</b>
     <select id="profile">
       <option value="hiking">hiking (prefers trails)</option>
       <option value="foot">foot (pedestrian)</option>
@@ -138,13 +138,11 @@
   <div class="row">
     <input id="routeName" placeholder="Route name" size="16" />
     <button id="btnGpx">Export GPX</button>
-    <button id="btnKml">KML</button>
-    <button id="btnGeo">GeoJSON</button>
     <button id="btnClear">Clear</button>
     <!-- Load GPX -->
     <button id="btnLoadGpx">Load GPX</button>
     <input type="file" id="gpxFile" accept=".gpx" style="display:none" />
-    <span id="status" class="ok">click/tap to add Start → End → Via… (drag markers; long-press/right-click to remove)</span>
+    <span id="status" class="ok">Click to add</span>
   </div>
 </div>
 
@@ -317,7 +315,7 @@ function addWaypoint(latlng){
 function redrawMarkers(){
   markersLayer.clearLayers();
   waypoints.forEach((ll, idx)=>{
-    const label = (idx===0?'Start': (idx===waypoints.length-1?'End':'Via'));
+    const label = (idx===0?'Start': (idx===waypoints.length-1?'End':'WP' + idx));
     const m = L.marker(ll, { draggable:true, title:label }).addTo(markersLayer);
     m.bindTooltip(label, {permanent:true, direction:'top', offset:[0,-12]});
     m.on('dragend', (ev)=>{ waypoints[idx] = ev.target.getLatLng(); computeRoute(); });
