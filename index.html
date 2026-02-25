@@ -307,6 +307,14 @@ let routeLayer   = null;   // L.GeoJSON of the route
 let currentGeo   = null;   // GeoJSON FeatureCollection of the route
 let activeRouteRequest = 0;
 let activeElevationRequest = 0;
+const profileCursorMarker = L.circleMarker([0,0], {
+  radius: 7,
+  color: '#38bdf8',
+  weight: 2,
+  fillColor: '#0ea5e9',
+  fillOpacity: 0.9,
+  opacity: 1
+});
 
 map.on('click', (e)=> addWaypoint(e.latlng));
 
@@ -464,6 +472,7 @@ function hideElevation(){
   elevWrap.classList.remove('open');
   elevChart.innerHTML = '';
   toggleElev.textContent = '⌃';
+  if (map.hasLayer(profileCursorMarker)) map.removeLayer(profileCursorMarker);
 }
 
 // simple median filter (odd window)
@@ -643,8 +652,8 @@ function renderElevation(latlngs, elevsRaw){
   const scaleX = (i)=> pad + (i/(elevs.length-1))*w;
   const scaleY = (z)=> pad + h - ((z - eMin) / (eMax - eMin || 1)) * h;
 
-  const line = mergeToLineString(currentGeo);
-  const waypointAnchors = getWaypointProfileAnchors(line, elevs.length);
+  const routeLine = mergeToLineString(currentGeo);
+  const waypointAnchors = getWaypointProfileAnchors(routeLine, elevs.length);
 
   // Path
   let d = '';
@@ -681,13 +690,13 @@ function renderElevation(latlngs, elevsRaw){
 
   // Hover/Touch tooltip
   const tooltip = document.createElementNS('http://www.w3.org/2000/svg','g');
-  const line   = document.createElementNS('http://www.w3.org/2000/svg','line');
+  const guideLine = document.createElementNS('http://www.w3.org/2000/svg','line');
   const dot    = document.createElementNS('http://www.w3.org/2000/svg','circle');
   const label  = document.createElementNS('http://www.w3.org/2000/svg','text');
-  line.setAttribute('stroke','#93c5fd'); line.setAttribute('y1', pad); line.setAttribute('y2', pad+h);
+  guideLine.setAttribute('stroke','#93c5fd'); guideLine.setAttribute('y1', pad); guideLine.setAttribute('y2', pad+h);
   dot.setAttribute('r','3'); dot.setAttribute('fill','#93c5fd'); dot.setAttribute('stroke','#111827');
   label.setAttribute('fill','#e5e7eb'); label.setAttribute('font-size','11');
-  tooltip.appendChild(line); tooltip.appendChild(dot); tooltip.appendChild(label);
+  tooltip.appendChild(guideLine); tooltip.appendChild(dot); tooltip.appendChild(label);
   elevChart.appendChild(tooltip);
   tooltip.style.display = 'none';
 
@@ -704,18 +713,37 @@ function renderElevation(latlngs, elevsRaw){
     const i = nearestIndex(x);
     const xi = scaleX(i), yi = scaleY(elevs[i]);
     tooltip.style.display = '';
-    line.setAttribute('x1', xi); line.setAttribute('x2', xi);
+    guideLine.setAttribute('x1', xi); guideLine.setAttribute('x2', xi);
     dot.setAttribute('cx', xi);  dot.setAttribute('cy', yi);
     label.setAttribute('x', xi+6); label.setAttribute('y', yi-8);
-    const distTotal = line ? (turf.length(line, {units:'kilometers'}) || 0) : 0;
+    const distTotal = routeLine ? (turf.length(routeLine, {units:'kilometers'}) || 0) : 0;
     const distAt = (distTotal * (i/(elevs.length-1)));
     label.textContent = `${Math.round(elevs[i])} m @ ${distAt.toFixed(2)} km`;
+
+    if (routeLine && distTotal > 0){
+      const snapPt = turf.along(routeLine, distAt, { units:'kilometers' });
+      const [lon, lat] = snapPt.geometry.coordinates;
+      const markerLatLng = L.latLng(lat, lon);
+      profileCursorMarker.setLatLng(markerLatLng);
+      if (!map.hasLayer(profileCursorMarker)) profileCursorMarker.addTo(map);
+
+      // Keep moving marker visible while scrubbing profile.
+      if (!map.getBounds().pad(-0.1).contains(markerLatLng)){
+        map.panTo(markerLatLng, { animate:true, duration:0.2 });
+      }
+    }
   }
 
   elevChart.onmousemove = updateTip;
   elevChart.ontouchstart = updateTip;
   elevChart.ontouchmove = updateTip;
-  elevChart.onmouseleave = ()=>{ tooltip.style.display = 'none'; };
+  function hideTip(){
+    tooltip.style.display = 'none';
+    if (map.hasLayer(profileCursorMarker)) map.removeLayer(profileCursorMarker);
+  }
+
+  elevChart.onmouseleave = hideTip;
+  elevChart.ontouchend = hideTip;
 }
 
 /* ============== Profile change triggers re-route ============== */
