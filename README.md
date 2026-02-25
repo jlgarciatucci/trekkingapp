@@ -2,7 +2,7 @@
 
 
 <p align="center">
-  <img src="https://github.com/user-attachments/assets/c46c8276-19be-4a7b-867c-3ed12eacc6ea"
+  <img src="https://github.com/user-attachments/assets/875bed43-7c0d-41ad-a0d5-f55716676cb0"
        alt="TrekkingApp screenshot"
        width="520" />
 </p>
