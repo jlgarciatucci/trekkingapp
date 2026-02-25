@@ -307,6 +307,14 @@ let routeLayer   = null;   // L.GeoJSON of the route
 let currentGeo   = null;   // GeoJSON FeatureCollection of the route
 let activeRouteRequest = 0;
 let activeElevationRequest = 0;
+const profileCursorMarker = L.circleMarker([0,0], {
+  radius: 7,
+  color: '#38bdf8',
+  weight: 2,
+  fillColor: '#0ea5e9',
+  fillOpacity: 0.9,
+  opacity: 1
+});
 
 map.on('click', (e)=> addWaypoint(e.latlng));
 
@@ -464,6 +472,7 @@ function hideElevation(){
   elevWrap.classList.remove('open');
   elevChart.innerHTML = '';
   toggleElev.textContent = '⌃';
+  if (map.hasLayer(profileCursorMarker)) map.removeLayer(profileCursorMarker);
 }
 
 // simple median filter (odd window)
@@ -710,12 +719,25 @@ function renderElevation(latlngs, elevsRaw){
     const distTotal = routeLine ? (turf.length(routeLine, {units:'kilometers'}) || 0) : 0;
     const distAt = (distTotal * (i/(elevs.length-1)));
     label.textContent = `${Math.round(elevs[i])} m @ ${distAt.toFixed(2)} km`;
+
+    if (routeLine && distTotal > 0){
+      const snapPt = turf.along(routeLine, distAt, { units:'kilometers' });
+      const [lon, lat] = snapPt.geometry.coordinates;
+      profileCursorMarker.setLatLng([lat, lon]);
+      if (!map.hasLayer(profileCursorMarker)) profileCursorMarker.addTo(map);
+    }
   }
 
   elevChart.onmousemove = updateTip;
   elevChart.ontouchstart = updateTip;
   elevChart.ontouchmove = updateTip;
-  elevChart.onmouseleave = ()=>{ tooltip.style.display = 'none'; };
+  function hideTip(){
+    tooltip.style.display = 'none';
+    if (map.hasLayer(profileCursorMarker)) map.removeLayer(profileCursorMarker);
+  }
+
+  elevChart.onmouseleave = hideTip;
+  elevChart.ontouchend = hideTip;
 }
 
 /* ============== Profile change triggers re-route ============== */
