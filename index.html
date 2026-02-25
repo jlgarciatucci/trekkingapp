@@ -643,8 +643,8 @@ function renderElevation(latlngs, elevsRaw){
   const scaleX = (i)=> pad + (i/(elevs.length-1))*w;
   const scaleY = (z)=> pad + h - ((z - eMin) / (eMax - eMin || 1)) * h;
 
-  const routeLine = mergeToLineString(currentGeo);
-  const waypointAnchors = getWaypointProfileAnchors(routeLine, elevs.length);
+  const line = mergeToLineString(currentGeo);
+  const waypointAnchors = getWaypointProfileAnchors(line, elevs.length);
 
   // Path
   let d = '';
@@ -707,7 +707,7 @@ function renderElevation(latlngs, elevsRaw){
     line.setAttribute('x1', xi); line.setAttribute('x2', xi);
     dot.setAttribute('cx', xi);  dot.setAttribute('cy', yi);
     label.setAttribute('x', xi+6); label.setAttribute('y', yi-8);
-    const distTotal = routeLine ? (turf.length(routeLine, {units:'kilometers'}) || 0) : 0;
+    const distTotal = line ? (turf.length(line, {units:'kilometers'}) || 0) : 0;
     const distAt = (distTotal * (i/(elevs.length-1)));
     label.textContent = `${Math.round(elevs[i])} m @ ${distAt.toFixed(2)} km`;
   }
