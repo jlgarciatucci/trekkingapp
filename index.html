@@ -723,6 +723,14 @@ function renderElevation(latlngs, elevsRaw){
     if (routeLine && distTotal > 0){
       const snapPt = turf.along(routeLine, distAt, { units:'kilometers' });
       const [lon, lat] = snapPt.geometry.coordinates;
+      const markerLatLng = L.latLng(lat, lon);
+      profileCursorMarker.setLatLng(markerLatLng);
+      if (!map.hasLayer(profileCursorMarker)) profileCursorMarker.addTo(map);
+
+      // Keep moving marker visible while scrubbing profile.
+      if (!map.getBounds().pad(-0.1).contains(markerLatLng)){
+        map.panTo(markerLatLng, { animate:true, duration:0.2 });
+      }
       profileCursorMarker.setLatLng([lat, lon]);
       if (!map.hasLayer(profileCursorMarker)) profileCursorMarker.addTo(map);
     }
