@@ -434,6 +434,25 @@ function updateDistance(km){
   distBadge.textContent = `${(km||0).toFixed(2)} km`;
 }
 
+function getWaypointProfileAnchors(line, sampleCount){
+  if (!line || !Array.isArray(waypoints) || waypoints.length < 2 || sampleCount < 2) return [];
+
+  const totalKm = turf.length(line, {units:'kilometers'}) || 0;
+  if (totalKm <= 0) return [];
+
+  return waypoints.map((ll, idx) => {
+    const pt = turf.point([ll.lng, ll.lat]);
+    const snapped = turf.nearestPointOnLine(line, pt, {units:'kilometers'});
+    const locationKm = Math.max(0, Math.min(totalKm, snapped.properties?.location ?? 0));
+    const profileIndex = Math.round((locationKm / totalKm) * (sampleCount - 1));
+
+    return {
+      index: profileIndex,
+      label: idx === 0 ? 'S' : (idx === waypoints.length - 1 ? 'E' : `W${idx}`)
+    };
+  });
+}
+
 /* ============== Elevation profile (robust) ============== */
 const statMin    = document.getElementById('statMin');
 const statMax    = document.getElementById('statMax');
@@ -624,6 +643,9 @@ function renderElevation(latlngs, elevsRaw){
   const scaleX = (i)=> pad + (i/(elevs.length-1))*w;
   const scaleY = (z)=> pad + h - ((z - eMin) / (eMax - eMin || 1)) * h;
 
+  const routeLine = mergeToLineString(currentGeo);
+  const waypointAnchors = getWaypointProfileAnchors(routeLine, elevs.length);
+
   // Path
   let d = '';
   for(let i=0;i<elevs.length;i++){
@@ -649,6 +671,11 @@ function renderElevation(latlngs, elevsRaw){
       const y = scaleY(t);
       return `<line x1="${pad}" y1="${y}" x2="${pad+w}" y2="${y}" stroke="#223" stroke-dasharray="3,3"/>
               <text x="${pad-6}" y="${y+4}" text-anchor="end" fill="#9ca3af" font-size="11">${Math.round(t)} m</text>`;
+    }).join('')}
+    ${waypointAnchors.map((wp)=>{
+      const x = scaleX(wp.index);
+      return `<line x1="${x}" y1="${pad}" x2="${x}" y2="${pad+h}" stroke="#60a5fa" stroke-dasharray="2,3" opacity="0.9"/>
+              <text x="${x}" y="${pad-6}" text-anchor="middle" fill="#93c5fd" font-size="10">${wp.label}</text>`;
     }).join('')}
   `;
 
@@ -680,7 +707,7 @@ function renderElevation(latlngs, elevsRaw){
     line.setAttribute('x1', xi); line.setAttribute('x2', xi);
     dot.setAttribute('cx', xi);  dot.setAttribute('cy', yi);
     label.setAttribute('x', xi+6); label.setAttribute('y', yi-8);
-    const distTotal = turf.length(mergeToLineString(currentGeo), {units:'kilometers'}) || 0;
+    const distTotal = routeLine ? (turf.length(routeLine, {units:'kilometers'}) || 0) : 0;
     const distAt = (distTotal * (i/(elevs.length-1)));
     label.textContent = `${Math.round(elevs[i])} m @ ${distAt.toFixed(2)} km`;
   }
