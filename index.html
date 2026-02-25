@@ -305,6 +305,8 @@ let waypoints = [];        // array of L.LatLng
 let markersLayer = L.layerGroup().addTo(map);
 let routeLayer   = null;   // L.GeoJSON of the route
 let currentGeo   = null;   // GeoJSON FeatureCollection of the route
+let activeRouteRequest = 0;
+let activeElevationRequest = 0;
 
 map.on('click', (e)=> addWaypoint(e.latlng));
 
@@ -343,6 +345,7 @@ document.getElementById('btnClear').onclick = ()=>{
 
 /* ============== Routing (BRouter first, OSRM foot fallback) ============== */
 async function computeRoute(){
+  const requestId = ++activeRouteRequest;
   if(routeLayer){ map.removeLayer(routeLayer); routeLayer = null; }
   currentGeo = null;
   hideElevation();
@@ -350,18 +353,22 @@ async function computeRoute(){
 
   try{
     const geo = await fetchBRouterGeoJSON(waypoints, profileSel.value);
+    if (requestId !== activeRouteRequest) return;
     drawRouteGeoJSON(geo);
     status('ok (BRouter)','ok');
-    await buildElevation(geo);
+    await buildElevation(geo, requestId);
   }catch(err){
+    if (requestId !== activeRouteRequest) return;
     console.warn('BRouter failed:', err);
     status('BRouter failed → trying OSRM foot…','warn');
     try{
       const geo = await fetchOSRMFootGeoJSON(waypoints);
+      if (requestId !== activeRouteRequest) return;
       drawRouteGeoJSON(geo);
       status('ok (OSRM foot fallback)','ok');
-      await buildElevation(geo);
+      await buildElevation(geo, requestId);
     }catch(e2){
+      if (requestId !== activeRouteRequest) return;
       console.error('OSRM fallback failed:', e2);
       status('routing failed on all services','err');
     }
@@ -376,7 +383,7 @@ function encodeLonLats(pts){
 async function fetchBRouterGeoJSON(pts, profile){
   const lonlats = encodeLonLats(pts);
   const url = `https://brouter.de/brouter?lonlats=${encodeURIComponent(lonlats)}&profile=${encodeURIComponent(profile)}&alternativeidx=0&format=geojson`;
-  const r = await fetch(url, { method:'GET' });
+  const r = await fetchWithTimeout(url, { method:'GET' }, 15000);
   if(!r.ok) throw new Error('HTTP '+r.status);
   return await r.json(); // FeatureCollection
 }
@@ -384,11 +391,21 @@ async function fetchBRouterGeoJSON(pts, profile){
 async function fetchOSRMFootGeoJSON(pts){
   const coords = pts.map(ll => `${ll.lng.toFixed(6)},${ll.lat.toFixed(6)}`).join(';');
   const url = `https://routing.openstreetmap.de/routed-foot/route/v1/foot/${coords}?overview=full&geometries=geojson&steps=false&alternatives=false`;
-  const r = await fetch(url, { method:'GET' });
+  const r = await fetchWithTimeout(url, { method:'GET' }, 15000);
   const j = await r.json().catch(()=>null);
   if(!r.ok || !j || !j.routes || !j.routes.length) throw new Error('OSRM foot error');
   const line = j.routes[0].geometry; // GeoJSON LineString
   return { type:'FeatureCollection', features:[{ type:'Feature', properties:{source:'osrm-foot'}, geometry: line }] };
+}
+
+async function fetchWithTimeout(url, options = {}, timeoutMs = 12000){
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(new Error('timeout')), timeoutMs);
+  try {
+    return await fetch(url, { ...options, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
 }
 
 /* ============== Draw + distance + fit ============== */
@@ -478,7 +495,8 @@ function routeInEurope(lineFeature){
   } catch { return false; }
 }
 
-async function buildElevation(geo){
+async function buildElevation(geo, routeRequestId = activeRouteRequest){
+  const elevationRequestId = ++activeElevationRequest;
   try{
     const line = mergeToLineString(geo);
     if(!line) { hideElevation(); return; }
@@ -499,6 +517,7 @@ async function buildElevation(geo){
     const dataset = routeInEurope(line) ? 'eudem25m' : 'srtm30m';
 
     const elevations = await fetchElevationsRobust(pts, dataset);
+    if (routeRequestId !== activeRouteRequest || elevationRequestId !== activeElevationRequest) return;
 
     if (!elevations || elevations.every(v => v == null)){
       status('Elevation unavailable (all providers failed)', 'warn');
@@ -547,7 +566,7 @@ async function fetchOpenTopoData(latlngs, dataset){
       .map(([lat,lon]) => `${lat.toFixed(5)},${lon.toFixed(5)}`).join('|');
     const url = `https://api.opentopodata.org/v1/${dataset}` +
                 `?locations=${encodeURIComponent(chunk)}&interpolation=cubic`;
-    const r = await fetch(url);
+    const r = await fetchWithTimeout(url, {}, 15000);
     const j = await r.json().catch(()=>null);
     if (!r.ok || !j || !j.results) throw new Error(`OpenTopoData ${r.status}`);
     j.results.forEach(res => out.push(res ? res.elevation : null));
@@ -562,7 +581,7 @@ async function fetchOpenElevation(latlngs){
     const chunk = latlngs.slice(i, i+BATCH)
       .map(([lat,lon]) => `${lat.toFixed(5)},${lon.toFixed(5)}`).join('|');
     const url = `https://api.open-elevation.com/api/v1/lookup?locations=${encodeURIComponent(chunk)}`;
-    const r = await fetch(url);
+    const r = await fetchWithTimeout(url, {}, 15000);
     const j = await r.json().catch(()=>null);
     if (!r.ok || !j || !j.results) throw new Error(`Open-Elevation ${r.status}`);
     j.results.forEach(res => out.push(res ? res.elevation : null));
@@ -575,6 +594,7 @@ function renderElevation(latlngs, elevsRaw){
 
   // always use MEDIUM smoothing
   const elevs = smoothSeries(elevsRaw, 'med');
+  if (!elevs.some(v => v != null && Number.isFinite(v))) return hideElevation();
 
   // Compute stats on smoothed series
   let min = Infinity, max = -Infinity, gain = 0, loss = 0;
