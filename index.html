@@ -731,6 +731,8 @@ function renderElevation(latlngs, elevsRaw){
       if (!map.getBounds().pad(-0.1).contains(markerLatLng)){
         map.panTo(markerLatLng, { animate:true, duration:0.2 });
       }
+      profileCursorMarker.setLatLng([lat, lon]);
+      if (!map.hasLayer(profileCursorMarker)) profileCursorMarker.addTo(map);
     }
   }
 
