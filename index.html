@@ -554,10 +554,10 @@ async function buildElevation(geo, routeRequestId = activeRouteRequest){
     }
 
     current_elev_cache = { latlngs: pts, elevs: elevations };
-    renderElevation(pts, elevations);
 
-    // show panel now (desktop visible; mobile starts opened a bit)
+    // Show panel before rendering so SVG can measure full responsive width.
     elevWrap.style.display = 'block';
+    renderElevation(pts, elevations);
     if (window.matchMedia('(max-width: 768px)').matches){
       elevWrap.classList.add('open');
       toggleElev.textContent = '⌄';
@@ -855,6 +855,12 @@ toggleElev.addEventListener('click', ()=>{
   setTimeout(()=>{ if(current_elev_cache) renderElevation(current_elev_cache.latlngs, current_elev_cache.elevs); }, 220);
 });
 
+// Keep profile chart responsive on viewport/layout changes.
+window.addEventListener('resize', ()=>{
+  if (!current_elev_cache || elevWrap.style.display === 'none') return;
+  renderElevation(current_elev_cache.latlngs, current_elev_cache.elevs);
+});
+
 /* ============== GPX Loader (no external libs) ============== */
 const btnLoadGpx = document.getElementById('btnLoadGpx');
 const gpxFileInp = document.getElementById('gpxFile');
@@ -881,8 +887,8 @@ gpxFileInp.addEventListener('change', async (e)=>{
     const elevFromGpx = extractElevProfileFromGeo(geo);
     if(elevFromGpx && elevFromGpx.latlngs && elevFromGpx.elevs && elevFromGpx.elevs.some(v=>v!=null)){
       current_elev_cache = elevFromGpx;
-      renderElevation(elevFromGpx.latlngs, elevFromGpx.elevs);
       elevWrap.style.display = 'block';
+      renderElevation(elevFromGpx.latlngs, elevFromGpx.elevs);
       if (window.matchMedia('(max-width: 768px)').matches){
         elevWrap.classList.add('open');
         toggleElev.textContent = '⌄';
